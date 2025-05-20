@@ -30,7 +30,7 @@ M3U8-Web 是一个基于 Web 界面的视频流下载工具，专为下载 M3U8 
 
 ### 手机端适配
 
-<img src="https://md-server.oss-cn-guangzhou.aliyuncs.com/images/7bc2d7fad00c55653e8b1b7cb14bc79b.jpg" alt="截图" style="zoom:30%;" />
+<img src="https://md-server.oss-cn-guangzhou.aliyuncs.com/images/7bc2d7fad00c55653e8b1b7cb14bc79b.jpg" alt="截图" width="30%" />
 
 ## 🔧 技术栈
 
