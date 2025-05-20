@@ -51,20 +51,11 @@ M3U8-Web 是一个基于 Web 界面的视频流下载工具，专为下载 M3U8 
 
 ### 📥 安装与运行
 
-1. 克隆仓库
+克隆仓库
 
 ```sh
 git clone https://github.com/yourusername/m3u8-web.git
 cd m3u8-web
-```
-
-2. 运行应用（两种方式）
-
-**💾 使用预编译版本**
-
-```sh
-# 直接下载并运行发布版本
-# Windows/macOS/Linux 版本可在发布页面获取
 ```
 
 **🔨 手动构建**
