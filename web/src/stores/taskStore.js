@@ -138,6 +138,21 @@ export const useTaskStore = defineStore('task', {
         console.error('继续任务失败:', error)
         return { success: false, message: error.response?.data?.message || '继续任务失败' }
       }
+    },
+    
+    async clearCompletedTasks() {
+      try {
+        const response = await axios.post('/api/tasks/clear-completed')
+        if (response.data.success) {
+          await this.fetchTasks()
+          return { success: true, message: response.data.message }
+        } else {
+          return { success: false, message: response.data.message }
+        }
+      } catch (error) {
+        console.error('清除已完成任务失败:', error)
+        return { success: false, message: error.response?.data?.message || '清除已完成任务失败' }
+      }
     }
   }
 }) 

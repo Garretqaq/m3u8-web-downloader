@@ -428,3 +428,37 @@ func fileExistsOnDisk(filePath string) bool {
 func (tm *TaskManager) getFileKey(folder, fileName string) string {
 	return filepath.Join(folder, fileName)
 }
+
+// ClearCompletedTasks 清除所有已完成的下载任务记录
+func (tm *TaskManager) ClearCompletedTasks() int {
+	tm.lock.Lock()
+	defer tm.lock.Unlock()
+
+	// 计数器，记录清除的任务数量
+	count := 0
+
+	// 找出所有已完成的任务
+	completedTaskIDs := make([]string, 0)
+	for id, task := range tm.tasks {
+		if task.Status == StatusSuccess {
+			completedTaskIDs = append(completedTaskIDs, id)
+			count++
+		}
+	}
+
+	// 清除所有已完成的任务
+	for _, id := range completedTaskIDs {
+		task := tm.tasks[id]
+
+		// 取消文件名占用
+		fileKey := tm.getFileKey(task.Output, task.FileName)
+		delete(tm.fileNameMap, fileKey)
+
+		// 从任务管理器中删除任务
+		delete(tm.tasks, id)
+
+		fmt.Printf("[管理器] 已清除完成任务: %s\n", id)
+	}
+
+	return count
+}

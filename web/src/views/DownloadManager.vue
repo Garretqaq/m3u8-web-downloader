@@ -17,6 +17,18 @@
               <template #icon><ReloadOutlined :spin="store.refreshing" /></template>
               刷新列表
             </a-button>
+            <a-button 
+              type="primary" 
+              @click="clearCompletedTasks" 
+              class="btn-with-effect" 
+              size="middle" 
+              style="margin-left: 12px" 
+              danger
+              :disabled="!hasCompletedTasks"
+            >
+              <template #icon><DeleteOutlined /></template>
+              清除已完成
+            </a-button>
             <a-button type="primary" @click="showNewTaskModal" style="margin-left: 12px" class="btn-with-effect" size="middle">
               <template #icon><PlusOutlined /></template>
               新建任务
@@ -347,9 +359,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount, h } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, h, computed } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { 
   PlusOutlined, 
   DeleteOutlined, 
@@ -690,6 +702,35 @@ const saveFormData = (values) => {
     console.error('保存表单数据失败:', err)
   }
 }
+
+// 清除已完成任务
+const clearCompletedTasks = async () => {
+  // 使用确认对话框
+  Modal.confirm({
+    title: '确认清除已完成任务',
+    icon: h(ExclamationCircleOutlined, { style: { color: '#ff4d4f' } }),
+    content: '确定要清除所有已完成的下载任务记录吗？',
+    okText: '确认清除',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: async () => {
+      message.loading({ content: '正在清除已完成任务...', key: 'clearTasks', duration: 0 })
+      
+      const result = await store.clearCompletedTasks()
+      
+      if (result.success) {
+        message.success({ content: result.message || '已清除完成任务', key: 'clearTasks', duration: 2 })
+      } else {
+        message.error({ content: result.message || '清除任务失败', key: 'clearTasks', duration: 3 })
+      }
+    }
+  })
+}
+
+// 判断是否有已完成任务的计算属性
+const hasCompletedTasks = computed(() => {
+  return store.tasks.some(task => task.status === 'success')
+})
 </script>
 
 <style scoped>

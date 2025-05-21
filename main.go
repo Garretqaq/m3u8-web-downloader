@@ -230,6 +230,15 @@ func main() {
 			}
 		})
 
+		// 清除已完成的下载任务
+		api.POST("/tasks/clear-completed", func(c *gin.Context) {
+			taskManager := dl.GetTaskManager()
+			count := taskManager.ClearCompletedTasks()
+
+			message := fmt.Sprintf("已清除%d个已完成的下载任务", count)
+			c.JSON(http.StatusOK, DownloadResponse{true, message, nil})
+		})
+
 		// 删除任务
 		api.DELETE("/tasks/:id", func(c *gin.Context) {
 			id := c.Param("id")
