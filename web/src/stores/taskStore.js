@@ -110,22 +110,6 @@ export const useTaskStore = defineStore('task', {
       }
     },
     
-    async openFileLocation(taskId) {
-      try {
-        const response = await axios.post(`/api/tasks/${taskId}/open-location`)
-        return { 
-          success: response.data.success, 
-          message: response.data.message 
-        }
-      } catch (error) {
-        console.error('打开文件位置失败:', error)
-        return { 
-          success: false, 
-          message: error.response?.data?.message || '打开文件位置失败' 
-        }
-      }
-    },
-    
     async retryTask(taskId) {
       try {
         const response = await axios.post(`/api/tasks/${taskId}/retry`)
@@ -138,21 +122,6 @@ export const useTaskStore = defineStore('task', {
       } catch (error) {
         console.error('重试下载任务失败:', error)
         return { success: false, message: error.response?.data?.message || '重试下载任务失败' }
-      }
-    },
-    
-    async pauseTask(taskId) {
-      try {
-        const response = await axios.post(`/api/tasks/${taskId}/pause`)
-        if (response.data.success) {
-          await this.fetchTasks()
-          return { success: true }
-        } else {
-          return { success: false, message: response.data.message }
-        }
-      } catch (error) {
-        console.error('暂停任务失败:', error)
-        return { success: false, message: error.response?.data?.message || '暂停任务失败' }
       }
     },
     

@@ -47,15 +47,23 @@ type TaskInfo struct {
 
 // 新增配置结构体
 type Settings struct {
-	DefaultOutputPath   string `json:"defaultOutputPath"`
-	DefaultThreadCount  int    `json:"defaultThreadCount"`
-	DefaultConvertToMp4 bool   `json:"defaultConvertToMp4"`
-	DefaultDeleteTs     bool   `json:"defaultDeleteTs"`
+	DefaultOutputPath     string `json:"defaultOutputPath"`
+	DefaultThreadCount    int    `json:"defaultThreadCount"`
+	DefaultConvertToMp4   bool   `json:"defaultConvertToMp4"`
+	DefaultDeleteTs       bool   `json:"defaultDeleteTs"`
+	MaxConcurrentDownload int    `json:"maxConcurrentDownload"`
 }
 
 func main() {
 	// 注册退出信号处理，确保清理临时文件
 	setupCleanupHandler()
+
+	// 加载配置初始化任务管理器
+	settings, _ := loadSettings()
+	taskManager := dl.GetTaskManager()
+	if settings.MaxConcurrentDownload > 0 && settings.MaxConcurrentDownload <= 10 {
+		taskManager.UpdateMaxConcurrentDownloads(settings.MaxConcurrentDownload)
+	}
 
 	// 使用 gin.New() 替代 gin.Default() 以关闭默认日志
 	r := gin.New()
@@ -135,19 +143,9 @@ func main() {
 			// 设置是否转换为MP4
 			downloader.ConvertToMp4 = req.ConvertToMp4
 
-			// 添加任务到管理器（如果之前没有自定义文件名）
-			if req.CustomFileName == "" && !req.ConvertToMp4 {
-				taskManager := dl.GetTaskManager()
-				taskManager.AddTask(downloader)
-			}
-
-			// 异步开始下载
-			go func() {
-				if err := downloader.Start(req.C); err != nil {
-					downloader.Status = dl.StatusFailed
-					downloader.Message = "下载失败: " + err.Error()
-				}
-			}()
+			// 将任务加入下载队列
+			taskManager := dl.GetTaskManager()
+			taskManager.EnqueueDownload(downloader)
 
 			// 立即返回任务信息
 			c.JSON(http.StatusOK, DownloadResponse{true, "下载任务已创建", TaskInfo{
@@ -212,24 +210,6 @@ func main() {
 				FileName: task.FileName,
 				Speed:    task.Speed,
 			}})
-		})
-
-		// 暂停下载任务
-		api.POST("/tasks/:id/pause", func(c *gin.Context) {
-			id := c.Param("id")
-			taskManager := dl.GetTaskManager()
-			task := taskManager.GetTask(id)
-
-			if task == nil {
-				c.JSON(http.StatusNotFound, DownloadResponse{false, "任务不存在", nil})
-				return
-			}
-
-			if success := task.Pause(); success {
-				c.JSON(http.StatusOK, DownloadResponse{true, "任务已暂停", nil})
-			} else {
-				c.JSON(http.StatusBadRequest, DownloadResponse{false, "任务无法暂停", nil})
-			}
 		})
 
 		// 继续下载任务
@@ -320,6 +300,15 @@ func main() {
 				return
 			}
 
+			// 验证同时下载数量
+			if settings.MaxConcurrentDownload <= 0 || settings.MaxConcurrentDownload > 10 {
+				settings.MaxConcurrentDownload = 3 // 设置默认值
+			}
+
+			// 更新任务管理器的最大并发下载数
+			taskManager := dl.GetTaskManager()
+			taskManager.UpdateMaxConcurrentDownloads(settings.MaxConcurrentDownload)
+
 			// 保存设置
 			if err := saveSettings(settings); err != nil {
 				c.JSON(http.StatusInternalServerError, DownloadResponse{
@@ -381,10 +370,11 @@ func setupCleanupHandler() {
 func loadSettings() (Settings, error) {
 	settingsPath := "./settings.json"
 	settings := Settings{
-		DefaultOutputPath:   "./downloads", // 默认值
-		DefaultThreadCount:  25,            // 默认值
-		DefaultConvertToMp4: true,          // 默认值
-		DefaultDeleteTs:     true,          // 默认值
+		DefaultOutputPath:     "./downloads", // 默认值
+		DefaultThreadCount:    25,            // 默认值
+		DefaultConvertToMp4:   true,          // 默认值
+		DefaultDeleteTs:       true,          // 默认值
+		MaxConcurrentDownload: 3,             // 默认同时下载数量
 	}
 
 	// 检查设置文件是否存在

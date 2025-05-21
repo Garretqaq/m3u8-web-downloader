@@ -95,6 +95,31 @@
                   </div>
                   <div class="form-extra">建议10-50，过高可能影响稳定性</div>
                 </a-form-item>
+
+                <a-form-item 
+                  name="maxConcurrentDownload" 
+                  label="同时下载数量" 
+                  :rules="[{ required: true, type: 'number', min: 1, max: 10, message: '同时下载数量为1-10' }]"
+                >
+                  <div class="thread-row">
+                    <a-slider
+                      v-model:value="formState.maxConcurrentDownload"
+                      :min="1"
+                      :max="10"
+                      :marks="{ 1: '', 3: '', 5: '', 10: '' }"
+                      class="thread-slider"
+                    />
+                    <a-input-number
+                      v-model:value="formState.maxConcurrentDownload"
+                      :min="1"
+                      :max="10"
+                      style="width: 70px;"
+                      size="middle"
+                      class="thread-input"
+                    />
+                  </div>
+                  <div class="form-extra">同时进行下载的最大任务数量，超出此数量的任务将会排队等待</div>
+                </a-form-item>
               </div>
             </div>
             
@@ -197,7 +222,8 @@ const formState = reactive({
   defaultOutputPath: '',
   defaultThreadCount: 25,
   defaultConvertToMp4: true,
-  defaultDeleteTs: true
+  defaultDeleteTs: true,
+  maxConcurrentDownload: 3
 })
 
 // 从服务器加载配置
@@ -212,6 +238,7 @@ const loadSettings = async () => {
       formState.defaultThreadCount = data.defaultThreadCount || 25;
       formState.defaultConvertToMp4 = data.defaultConvertToMp4 !== undefined ? data.defaultConvertToMp4 : true;
       formState.defaultDeleteTs = data.defaultDeleteTs !== undefined ? data.defaultDeleteTs : true;
+      formState.maxConcurrentDownload = data.maxConcurrentDownload || 3;
       console.log('设置后的表单状态:', formState)
     } else {
       message.error('加载配置失败: ' + response.data.message)
@@ -233,7 +260,8 @@ const saveSettings = async () => {
       defaultOutputPath: formState.defaultOutputPath,
       defaultThreadCount: formState.defaultThreadCount,
       defaultConvertToMp4: formState.defaultConvertToMp4,
-      defaultDeleteTs: formState.defaultDeleteTs
+      defaultDeleteTs: formState.defaultDeleteTs,
+      maxConcurrentDownload: formState.maxConcurrentDownload
     })
     
     if (response.data.success) {

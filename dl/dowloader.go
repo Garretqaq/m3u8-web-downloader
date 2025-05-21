@@ -30,7 +30,6 @@ const (
 	StatusPending     = "pending"     // 等待下载
 	StatusStopped     = "stopped"     // 已停止
 	StatusConverting  = "converting"  // 正在转换格式
-	StatusPaused      = "paused"      // 已暂停
 )
 
 type Downloader struct {
@@ -295,53 +294,35 @@ func (d *Downloader) DeleteFiles() error {
 	return nil
 }
 
-// Pause 暂停下载任务
-func (d *Downloader) Pause() bool {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-
-	// 只有下载中的任务才能暂停
-	if d.Status == StatusDownloading {
-		d.Status = StatusPaused
-		d.Message = "下载已暂停"
-		fmt.Printf("[task %s] 下载已暂停\n", d.ID)
-		return true
-	}
-	return false
-}
-
 // Resume 继续下载任务
 func (d *Downloader) Resume() bool {
 	d.lock.Lock()
-	if d.Status != StatusPaused {
+	if d.Status != StatusStopped {
 		d.lock.Unlock()
 		return false
 	}
 
-	// 更改状态为下载中
-	d.Status = StatusDownloading
-	d.Message = "继续下载中"
-	fmt.Printf("[task %s] 继续下载中\n", d.ID)
+	// 获取任务管理器
+	taskManager := GetTaskManager()
+
+	// 先恢复状态为等待中
+	d.Status = StatusPending
+	d.Message = "排队等待下载"
 	d.lock.Unlock()
 
+	// 使用任务队列管理机制重新启动任务
+	// 先把任务从管理器移除，因为EnqueueDownload会重新添加任务
+	taskManager.DeleteTask(d.ID)
+
+	// 通过队列机制重新启动任务
+	taskManager.EnqueueDownload(d)
+
+	fmt.Printf("[task %s] 任务已恢复，通过队列机制重新启动\n", d.ID)
 	return true
 }
 
 // 修改 download 方法，添加检查暂停状态的逻辑
 func (d *Downloader) download(segIndex int) error {
-	// 检查是否处于暂停状态，如果是则等待
-	for {
-		d.lock.Lock()
-		isPaused := d.Status == StatusPaused
-		d.lock.Unlock()
-
-		if !isPaused {
-			break
-		}
-		// 当任务处于暂停状态时，睡眠一段时间再检查
-		time.Sleep(1 * time.Second)
-	}
-
 	tsFilename := tsFilename(segIndex)
 	tsUrl := d.tsURL(segIndex)
 	b, e := tool.Get(tsUrl)

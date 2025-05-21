@@ -46,7 +46,6 @@
                         <LoadingOutlined v-if="task.status === 'downloading' || task.status === 'converting'" spin />
                         <CheckCircleOutlined v-else-if="task.status === 'success'" />
                         <CloseCircleOutlined v-else-if="task.status === 'failed'" />
-                        <PauseCircleOutlined v-else-if="task.status === 'paused'" />
                         <PauseCircleOutlined v-else-if="task.status === 'stopped'" />
                         <ClockCircleOutlined v-else />
                       </span>
@@ -54,42 +53,6 @@
                     </a-tag>
                   </div>
                   <div class="task-actions">
-                    <a-tooltip title="在文件管理器中打开">
-                      <a-button 
-                        v-if="task.status === 'success'"
-                        type="primary" 
-                        shape="circle" 
-                        size="small"
-                        @click="openFileLocation(task.id)"
-                        class="action-button folder-button"
-                      >
-                        <template #icon><FolderOpenOutlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="暂停下载">
-                      <a-button 
-                        v-if="task.status === 'downloading'"
-                        type="primary" 
-                        shape="circle" 
-                        size="small"
-                        @click="pauseTask(task.id)"
-                        class="action-button pause-button"
-                      >
-                        <template #icon><PauseOutlined /></template>
-                      </a-button>
-                    </a-tooltip>
-                    <a-tooltip title="继续下载">
-                      <a-button 
-                        v-if="task.status === 'paused'"
-                        type="primary" 
-                        shape="circle" 
-                        size="small"
-                        @click="resumeTask(task.id)"
-                        class="action-button resume-button"
-                      >
-                        <template #icon><CaretRightOutlined /></template>
-                      </a-button>
-                    </a-tooltip>
                     <a-tooltip title="重试下载">
                       <a-button 
                         v-if="task.status === 'failed'"
@@ -404,12 +367,9 @@ import {
   CloseCircleOutlined,
   PauseCircleOutlined,
   ClockCircleOutlined,
-  FolderOpenOutlined,
   SettingOutlined,
   UpOutlined,
-  ThunderboltOutlined,
-  PauseOutlined,
-  CaretRightOutlined
+  ThunderboltOutlined
 } from '@ant-design/icons-vue'
 import axios from 'axios'
 
@@ -440,8 +400,7 @@ const statusColors = {
   'converting': 'purple',
   'success': 'success',
   'failed': 'error',
-  'stopped': 'warning',
-  'paused': 'orange'
+  'stopped': 'warning'
 }
 
 // 状态文本映射
@@ -451,8 +410,7 @@ const statusTexts = {
   'converting': '格式转换中',
   'success': '下载完成',
   'failed': '下载失败',
-  'stopped': '已停止',
-  'paused': '已暂停'
+  'stopped': '已停止'
 }
 
 // localStorage键名
@@ -640,14 +598,6 @@ const handleDelete = async () => {
   }
 }
 
-// 打开文件位置
-const openFileLocation = async (id) => {
-  const result = await store.openFileLocation(id)
-  if (!result.success) {
-    message.error(result.message || '无法打开文件位置')
-  }
-}
-
 // 重试任务
 const retryTask = async (id) => {
   message.loading({ content: '正在重新开始下载...', key: 'retryTask', duration: 0 })
@@ -673,30 +623,6 @@ const formatSpeed = (speed) => {
     return `${(speed / (1024 * 1024)).toFixed(1)} MB/s`;
   } else {
     return `${(speed / (1024 * 1024 * 1024)).toFixed(1)} GB/s`;
-  }
-}
-
-// 暂停任务
-const pauseTask = async (id) => {
-  message.loading({ content: '正在暂停下载...', key: 'pauseTask', duration: 0 })
-  const result = await store.pauseTask(id)
-  
-  if (result.success) {
-    message.success({ content: '已暂停下载', key: 'pauseTask', duration: 2 })
-  } else {
-    message.error({ content: result.message || '暂停下载失败', key: 'pauseTask', duration: 3 })
-  }
-}
-
-// 继续任务
-const resumeTask = async (id) => {
-  message.loading({ content: '正在继续下载...', key: 'resumeTask', duration: 0 })
-  const result = await store.resumeTask(id)
-  
-  if (result.success) {
-    message.success({ content: '已继续下载', key: 'resumeTask', duration: 2 })
-  } else {
-    message.error({ content: result.message || '继续下载失败', key: 'resumeTask', duration: 3 })
   }
 }
 
