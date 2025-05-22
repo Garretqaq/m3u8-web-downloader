@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"m3u8-go/internal/config"
+	"m3u8-go/internal/tool"
 )
 
 // TaskManager 管理所有下载任务
@@ -59,7 +60,7 @@ func GetTaskManager() *TaskManager {
 
 		// 启动队列处理器
 		go instance.startQueueProcessor()
-		fmt.Printf("[任务管理器] 初始化完成，默认同时下载数量: %d\n", instance.maxConcurrent)
+		tool.Info("[任务管理器] 初始化完成，默认同时下载数量: %d", instance.maxConcurrent)
 	})
 	return instance
 }
@@ -95,7 +96,7 @@ func (tm *TaskManager) UpdateDownloadSpeedLimit(limit int) {
 		limit = 0
 	}
 
-	fmt.Printf("[任务管理器] 更新下载速度限制为 %d KB/s\n", limit)
+	tool.Info("[任务管理器] 更新下载速度限制为 %d KB/s", limit)
 	tm.speedLimit = limit
 }
 
@@ -115,7 +116,7 @@ func (tm *TaskManager) GetMaxConcurrentDownloads() int {
 
 // startQueueProcessor 启动队列处理器
 func (tm *TaskManager) startQueueProcessor() {
-	fmt.Println("[队列处理器] 启动下载队列处理器")
+	tool.Info("[队列处理器] 启动下载队列处理器")
 
 	// 确保之前的定时器被停止（如果存在）
 	if tm.downloadQueueTick != nil {
@@ -135,7 +136,7 @@ func (tm *TaskManager) startQueueProcessor() {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						fmt.Printf("[队列处理器] 处理队列时出现错误: %v，已恢复继续运行\n", r)
+						tool.Error("[队列处理器] 处理队列时出现错误: %v，已恢复继续运行", r)
 					}
 				}()
 
@@ -144,7 +145,7 @@ func (tm *TaskManager) startQueueProcessor() {
 		}
 	}()
 
-	fmt.Println("[队列处理器] 队列处理器已启动并运行中")
+	tool.Info("[队列处理器] 队列处理器已启动并运行中")
 }
 
 // checkQueuedTasks 检查排队中的任务，尝试启动新的任务
@@ -158,14 +159,14 @@ func (tm *TaskManager) checkQueuedTasks() {
 		return
 	}
 
-	fmt.Printf("[队列处理] 开始处理等待队列，当前队列长度: %d\n", queueLength)
+	tool.Debug("[队列处理] 开始处理等待队列，当前队列长度: %d", queueLength)
 
 	// 检查当前可用槽位数
 	availableSlots := tm.maxConcurrent - len(tm.downloadingSem)
-	fmt.Printf("[队列处理] 当前可用下载槽位: %d (最大:%d, 使用中:%d)\n", availableSlots, tm.maxConcurrent, len(tm.downloadingSem))
+	tool.Debug("[队列处理] 当前可用下载槽位: %d (最大:%d, 使用中:%d)", availableSlots, tm.maxConcurrent, len(tm.downloadingSem))
 
 	if availableSlots <= 0 {
-		fmt.Println("[队列处理] 无可用下载槽位，等待中...")
+		tool.Debug("[队列处理] 无可用下载槽位，等待中...")
 		return
 	}
 
@@ -176,7 +177,7 @@ func (tm *TaskManager) checkQueuedTasks() {
 	for _, task := range tm.downloadQueue {
 		// 确认任务仍然处于等待状态
 		if task.Status != StatusPending {
-			fmt.Printf("[队列处理] 任务 %s 状态异常: %s，从队列中移除\n", task.ID, task.Status)
+			tool.Warning("[队列处理] 任务 %s 状态异常: %s，从队列中移除", task.ID, task.Status)
 			continue // 跳过状态不正确的任务
 		}
 
@@ -184,7 +185,7 @@ func (tm *TaskManager) checkQueuedTasks() {
 		select {
 		case tm.downloadingSem <- struct{}{}:
 			// 成功获取槽位，启动下载
-			fmt.Printf("[队列处理] 成功获取槽位，启动任务 %s\n", task.ID)
+			tool.Info("[队列处理] 成功获取槽位，启动任务 %s", task.ID)
 			task.Status = StatusDownloading
 			task.Message = "正在下载"
 			tasksStarted++
@@ -194,7 +195,7 @@ func (tm *TaskManager) checkQueuedTasks() {
 				defer func() {
 					// 下载完成后释放槽位
 					<-tm.downloadingSem
-					fmt.Printf("[队列处理] 任务 %s 完成，已释放下载槽位\n", t.ID)
+					tool.Info("[队列处理] 任务 %s 完成，已释放下载槽位", t.ID)
 
 					// 下载完成后检查队列，可能有等待的任务
 					tm.checkQueuedTasks()
@@ -204,23 +205,23 @@ func (tm *TaskManager) checkQueuedTasks() {
 				if t.C <= 0 {
 					t.C = config.Get().DefaultThreadCount // 使用默认值
 				}
-				fmt.Printf("[队列处理] 任务 %s 开始下载，线程数: %d\n", t.ID, t.C)
+				tool.Info("[队列处理] 任务 %s 开始下载，线程数: %d", t.ID, t.C)
 
 				if err := t.Start(t.C); err != nil {
 					t.Status = StatusFailed
 					t.Message = "下载失败: " + err.Error()
-					fmt.Printf("[队列处理] 任务 %s 下载失败: %s\n", t.ID, err)
+					tool.Error("[队列处理] 任务 %s 下载失败: %s", t.ID, err)
 				}
 			}(task)
 		default:
 			// 没有可用槽位，保留在队列中
-			fmt.Printf("[队列处理] 无可用槽位，任务 %s 保留在队列\n", task.ID)
+			tool.Debug("[队列处理] 无可用槽位，任务 %s 保留在队列", task.ID)
 			newQueue = append(newQueue, task)
 		}
 	}
 
 	tm.downloadQueue = newQueue
-	fmt.Printf("[队列处理] 队列处理完成，启动了 %d 个任务，剩余 %d 个任务在队列\n",
+	tool.Info("[队列处理] 队列处理完成，启动了 %d 个任务，剩余 %d 个任务在队列",
 		tasksStarted, len(tm.downloadQueue))
 }
 
@@ -260,7 +261,7 @@ func (tm *TaskManager) EnqueueDownload(task *Downloader) {
 		tm.downloadQueue = append(tm.downloadQueue, task)
 		tm.queueLock.Unlock()
 
-		fmt.Printf("[队列] 任务 %s 加入下载队列，当前队列长度: %d\n", task.ID, len(tm.downloadQueue))
+		tool.Info("[队列] 任务 %s 加入下载队列，当前队列长度: %d", task.ID, len(tm.downloadQueue))
 	}
 }
 
@@ -322,11 +323,11 @@ func (tm *TaskManager) StopAndDeleteTask(id string) (bool, error) {
 	tm.lock.Unlock()
 
 	// 1. 停止任务下载
-	fmt.Printf("[管理器] 停止任务 %s，状态: %s\n", id, task.Status)
+	tool.Info("[管理器] 停止任务 %s，状态: %s", id, task.Status)
 	task.Stop()
 
 	// 2. 删除任务文件
-	fmt.Printf("[管理器] 删除任务 %s 的文件\n", id)
+	tool.Info("[管理器] 删除任务 %s 的文件", id)
 	err := task.DeleteFiles()
 
 	// 3. 从管理器中删除任务
@@ -334,17 +335,17 @@ func (tm *TaskManager) StopAndDeleteTask(id string) (bool, error) {
 	delete(tm.tasks, id)
 	tm.lock.Unlock()
 
-	fmt.Printf("[管理器] 任务 %s 已从管理器中删除\n", id)
+	tool.Info("[管理器] 任务 %s 已从管理器中删除", id)
 
 	// 4. 如果删除的是占用下载槽位的任务，释放下载槽位并检查队列
 	// 但要注意，我们不确定这个任务是否真的占用了下载槽位，因为它可能仅仅是在队列中
 	if isOccupyingSlot {
-		fmt.Printf("[管理器] 任务 %s 可能占用下载槽位，尝试释放\n", id)
+		tool.Debug("[管理器] 任务 %s 可能占用下载槽位，尝试释放", id)
 
 		// 尝试释放下载槽位，确保不会阻塞
 		select {
 		case <-tm.downloadingSem:
-			fmt.Printf("[管理器] 成功释放任务 %s 的下载槽位\n", id)
+			tool.Info("[管理器] 成功释放任务 %s 的下载槽位", id)
 			// 只有成功释放了槽位，才去检查队列
 			go func() {
 				// 延迟一小段时间，确保任务管理器状态已更新
@@ -352,7 +353,7 @@ func (tm *TaskManager) StopAndDeleteTask(id string) (bool, error) {
 				tm.checkQueuedTasks()
 			}()
 		default:
-			fmt.Printf("[管理器] 任务 %s 可能并未占用下载槽位\n", id)
+			tool.Debug("[管理器] 任务 %s 可能并未占用下载槽位", id)
 			// 虽然没释放成功，但还是尝试检查队列，可能有其他原因导致队列中的任务没被激活
 			go tm.checkQueuedTasks()
 		}
@@ -381,14 +382,14 @@ func (tm *TaskManager) DeleteTask(id string) bool {
 
 		// 如果删除的是占用下载槽位的任务，释放下载槽位并检查队列
 		if isOccupyingSlot {
-			fmt.Printf("[管理器] DeleteTask: 任务 %s 可能占用下载槽位，尝试释放\n", id)
+			tool.Debug("[管理器] DeleteTask: 任务 %s 可能占用下载槽位，尝试释放", id)
 			// 由于有 defer tm.lock.Unlock()，需要先解锁以避免死锁
 			tm.lock.Unlock()
 
 			// 尝试释放下载槽位，确保不会阻塞
 			select {
 			case <-tm.downloadingSem:
-				fmt.Printf("[管理器] DeleteTask: 成功释放任务 %s 的下载槽位\n", id)
+				tool.Info("[管理器] DeleteTask: 成功释放任务 %s 的下载槽位", id)
 				// 只有成功释放了槽位，才去检查队列
 				go func() {
 					// 延迟一小段时间，确保任务管理器状态已更新
@@ -396,7 +397,7 @@ func (tm *TaskManager) DeleteTask(id string) bool {
 					tm.checkQueuedTasks()
 				}()
 			default:
-				fmt.Printf("[管理器] DeleteTask: 任务 %s 可能并未占用下载槽位\n", id)
+				tool.Debug("[管理器] DeleteTask: 任务 %s 可能并未占用下载槽位", id)
 				// 虽然没释放成功，但还是尝试检查队列
 				go tm.checkQueuedTasks()
 			}
@@ -502,7 +503,7 @@ func (tm *TaskManager) ClearCompletedTasks() int {
 		// 从任务管理器中删除任务
 		delete(tm.tasks, id)
 
-		fmt.Printf("[管理器] 已清除完成任务: %s\n", id)
+		tool.Debug("[管理器] 已清除完成任务: %s", id)
 	}
 
 	return count

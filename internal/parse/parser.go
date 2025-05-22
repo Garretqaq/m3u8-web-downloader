@@ -54,15 +54,16 @@ func FromURL(link string) (*Result, error) {
 			keyURL = tool.ResolveURL(u, keyURL)
 			resp, err := tool.Get(keyURL)
 			if err != nil {
-				return nil, fmt.Errorf("extract key failed: %s", err.Error())
+				return nil, fmt.Errorf("get key error: %s", err.Error())
 			}
-			keyByte, err := io.ReadAll(resp)
-			_ = resp.Close()
-			if err != nil {
-				return nil, err
-			}
-			fmt.Println("decryption key: ", string(keyByte))
-			result.Keys[idx] = string(keyByte)
+			keyByte, _ := io.ReadAll(resp)
+			keyValue := string(keyByte)
+
+			// 调试信息，使用日志模块
+			tool.Debug("decryption key: %s", keyValue)
+
+			ke := keyValue
+			result.Keys[idx] = ke
 		default:
 			return nil, fmt.Errorf("unknown or unsupported cryption method: %s", key.Method)
 		}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // 暂存需要清理的临时文件/目录
@@ -60,7 +61,8 @@ func ResolveURL(u *url.URL, p string) string {
 
 func DrawProgressBar(prefix string, proportion float32, width int, suffix ...string) {
 	pos := int(proportion * float32(width))
-	s := fmt.Sprintf("[%s] %s%*s %6.2f%% %s",
-		prefix, strings.Repeat("■", pos), width-pos, "", proportion*100, strings.Join(suffix, ""))
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+	s := fmt.Sprintf("[%s] [%s] %s%*s %6.2f%% %s",
+		timestamp, prefix, strings.Repeat("■", pos), width-pos, "", proportion*100, strings.Join(suffix, ""))
 	fmt.Print("\r" + s)
 }

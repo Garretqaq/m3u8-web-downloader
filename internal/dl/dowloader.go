@@ -24,6 +24,7 @@ const (
 	mergeTSFilename  = "main.ts" // 默认名称，当没有指定文件名时使用
 	tsTempFileSuffix = "_tmp"
 	progressWidth    = 40
+	maxRetryCount    = 3 // 最大重试次数，防止无限重试
 
 	// 任务状态常量
 	StatusDownloading = "downloading" // 下载中
@@ -41,6 +42,9 @@ type Downloader struct {
 	tsFolder string
 	finish   int32
 	segLen   int
+
+	// 添加重试计数map，用于限制每个分片的重试次数
+	retryCounter map[int]int
 
 	ID                   string  // 任务ID
 	Progress             int     // 下载进度 (0-100)
@@ -140,6 +144,7 @@ func NewTask(output string, url string) (*Downloader, error) {
 		lastBytes:            0,
 		lastSpeedTime:        time.Now(),
 		C:                    defaultThreadCount, // 设置默认线程数
+		retryCounter:         make(map[int]int),  // 初始化重试计数器
 	}
 	d.segLen = len(result.M3u8.Segments)
 	d.queue = genSlice(d.segLen)
@@ -151,8 +156,9 @@ func (d *Downloader) Start(concurrency int) error {
 	d.C = concurrency
 	d.Status = StatusDownloading
 	d.Message = "正在下载"
-	d.stopped = false                // 重置停止标志
-	d.stopChan = make(chan struct{}) // 重新创建停止通道
+	d.stopped = false                  // 重置停止标志
+	d.stopChan = make(chan struct{})   // 重新创建停止通道
+	d.retryCounter = make(map[int]int) // 重置重试计数器
 
 	var wg sync.WaitGroup
 	// struct{} zero size
@@ -169,32 +175,82 @@ func (d *Downloader) Start(concurrency int) error {
 		d.Status = StatusStopped
 		d.Message = "下载已停止"
 		d.stopped = true
+		stopFlag = true
 		d.lock.Unlock()
+		tool.Info("[task %s] 收到停止信号", d.ID)
 	}()
 
+	// 设置清理函数，确保在函数退出时总是能等待所有协程完成
 	defer func() {
 		// 如果函数退出但没有正常结束，标记为已停止
 		if d.Status != StatusSuccess && d.Status != StatusFailed {
 			d.Status = StatusStopped
 		}
-	}()
 
-	for {
-		// 检查任务是否已停止
-		if stopFlag {
-			break
+		// 等待所有工作协程完成，添加超时保护
+		waitChan := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(waitChan)
+		}()
+
+		// 等待协程完成或超时（最多等待5秒）
+		select {
+		case <-waitChan:
+			tool.Info("[task %s] 所有下载协程已完成", d.ID)
+		case <-time.After(5 * time.Second):
+			tool.Warning("[task %s] 等待协程超时，可能有泄漏的协程", d.ID)
 		}
 
+		// 确保stopChan被关闭
+		d.lock.Lock()
+		select {
+		case <-d.stopChan:
+			// 已经关闭，不需要再次关闭
+		default:
+			close(d.stopChan)
+		}
+		d.stopped = true
+		d.lock.Unlock()
+	}()
+
+	// 添加安全检查，防止段索引越界
+	if d.segLen <= 0 || d.result == nil || d.result.M3u8 == nil || len(d.result.M3u8.Segments) == 0 {
+		d.Status = StatusFailed
+		d.Message = "无效的M3U8数据，没有可下载的分片"
+		return fmt.Errorf("invalid m3u8 data: no segments to download")
+	}
+
+	// 主下载循环
+downloadLoop:
+	for !stopFlag {
 		tsIdx, end, err := d.next()
 		if err != nil {
 			if end {
-				break
+				break downloadLoop
 			}
+
+			// 添加短暂延迟，避免CPU满负荷循环
+			time.Sleep(20 * time.Millisecond)
 			continue
 		}
+
+		// 安全检查
+		if tsIdx < 0 || tsIdx >= d.segLen {
+			tool.Error("[error] Invalid segment index: %d (range: 0-%d)", tsIdx, d.segLen-1)
+			continue
+		}
+
 		wg.Add(1)
 		go func(idx int) {
-			defer wg.Done()
+			defer func() {
+				wg.Done()
+				// 捕获协程中的panic
+				if r := recover(); r != nil {
+					tool.Error("[panic] 下载协程异常退出: %v", r)
+				}
+			}()
+
 			// 检查是否已停止
 			if d.stopped {
 				<-limitChan
@@ -203,27 +259,61 @@ func (d *Downloader) Start(concurrency int) error {
 
 			if err := d.download(idx); err != nil {
 				// Back into the queue, retry request
-				fmt.Printf("[failed] %s\n", err.Error())
+				tool.Warning("[failed] %s", err.Error())
 				if !d.stopped { // 只有在没有停止的情况下才重试
 					if err := d.back(idx); err != nil {
-						fmt.Printf("%s", err.Error())
+						tool.Error("%s", err.Error())
 					}
 				}
 			}
 			<-limitChan
 		}(tsIdx)
 		limitChan <- struct{}{}
+
+		// 添加周期性的进度汇报和健康检查
+		if tsIdx%50 == 0 {
+			tool.Info("[progress] 已分发 %d/%d 个分片任务，完成：%d，进度：%d%%",
+				tsIdx, d.segLen, atomic.LoadInt32(&d.finish), d.Progress)
+
+			// 检查是否有太多失败，提前终止可能无法完成的任务
+			if atomic.LoadInt32(&d.finish) < int32(float32(tsIdx)*0.3) && tsIdx > 100 {
+				tool.Warning("[warning] 成功率过低，可能遇到严重问题")
+			}
+		}
 	}
 
-	fmt.Printf("[task %s] 等待所有下载协程完成\n", d.ID)
-	wg.Wait()
+	tool.Info("[task %s] 等待所有下载协程完成", d.ID)
+
+	// 等待所有协程完成
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	// 等待所有协程完成或超时
+	select {
+	case <-waitDone:
+		tool.Info("[task %s] 所有分片下载协程已完成", d.ID)
+	case <-time.After(30 * time.Second):
+		tool.Warning("[task %s] 等待下载协程超时，继续后续处理", d.ID)
+	}
 
 	// 如果下载已停止，直接返回
 	if d.stopped {
-		fmt.Printf("[task %s] 任务已停止，跳过合并步骤\n", d.ID)
+		tool.Info("[task %s] 任务已停止，跳过合并步骤", d.ID)
 		return nil
 	}
 
+	// 检查进度，如果完成的数量太少，可以选择不进行合并
+	finishedCount := atomic.LoadInt32(&d.finish)
+	if finishedCount < int32(float32(d.segLen)*0.5) {
+		d.Status = StatusFailed
+		d.Message = fmt.Sprintf("下载失败: 只完成了 %d/%d 个分片，无法合并", finishedCount, d.segLen)
+		return fmt.Errorf("too few segments downloaded (%d of %d)", finishedCount, d.segLen)
+	}
+
+	// 尝试合并，如果合并失败则设置相应状态
 	if err := d.merge(); err != nil {
 		d.Status = StatusFailed
 		d.Message = "合并失败: " + err.Error()
@@ -252,7 +342,7 @@ func (d *Downloader) Stop() {
 			d.stopped = true
 			d.Status = StatusStopped
 			d.Message = "下载已停止"
-			fmt.Printf("[task %s] 下载已停止\n", d.ID)
+			tool.Info("[task %s] 下载已停止", d.ID)
 		}
 	}
 }
@@ -263,6 +353,12 @@ func (d *Downloader) DeleteFiles() error {
 	if d.Status == StatusDownloading || d.Status == StatusConverting {
 		d.Stop()
 	}
+
+	// 确保标记任务为已停止状态
+	d.lock.Lock()
+	d.stopped = true
+	d.Status = StatusStopped
+	d.lock.Unlock()
 
 	var errs []string
 
@@ -325,12 +421,17 @@ func (d *Downloader) Resume() bool {
 	// 通过队列机制重新启动任务
 	taskManager.EnqueueDownload(d)
 
-	fmt.Printf("[task %s] 任务已恢复，通过队列机制重新启动\n", d.ID)
+	tool.Info("[task %s] 任务已恢复，通过队列机制重新启动", d.ID)
 	return true
 }
 
 // 修改 download 方法，添加检查暂停状态的逻辑
 func (d *Downloader) download(segIndex int) error {
+	// 首先检查是否已停止
+	if d.stopped {
+		return fmt.Errorf("task stopped")
+	}
+
 	tsFilename := tsFilename(segIndex)
 	tsUrl := d.tsURL(segIndex)
 	b, e := tool.Get(tsUrl)
@@ -339,6 +440,12 @@ func (d *Downloader) download(segIndex int) error {
 	}
 	//noinspection GoUnhandledErrorResult
 	defer b.Close()
+
+	// 再次检查是否已停止
+	if d.stopped {
+		return fmt.Errorf("task stopped")
+	}
+
 	fPath := filepath.Join(d.tsFolder, tsFilename)
 	fTemp := fPath + tsTempFileSuffix
 	f, err := os.Create(fTemp)
@@ -350,11 +457,19 @@ func (d *Downloader) download(segIndex int) error {
 
 	rawBytes, err := io.ReadAll(b)
 	if err != nil {
+		f.Close() // 确保文件关闭
 		return fmt.Errorf("read bytes: %s, %s", tsUrl, err.Error())
+	}
+
+	// 再次检查是否已停止
+	if d.stopped {
+		f.Close() // 确保文件关闭
+		return fmt.Errorf("task stopped")
 	}
 
 	sf := d.result.M3u8.Segments[segIndex]
 	if sf == nil {
+		f.Close() // 确保文件关闭
 		return fmt.Errorf("invalid segment index: %d", segIndex)
 	}
 
@@ -363,6 +478,7 @@ func (d *Downloader) download(segIndex int) error {
 		rawBytes, err = tool.AES128Decrypt(rawBytes, []byte(key),
 			[]byte(d.result.M3u8.Keys[sf.KeyIndex].IV))
 		if err != nil {
+			f.Close() // 确保文件关闭
 			return fmt.Errorf("decryt: %s, %s", tsUrl, err.Error())
 		}
 	}
@@ -375,16 +491,23 @@ func (d *Downloader) download(segIndex int) error {
 	}
 
 	if _, err := writer.Write(rawBytes); err != nil {
+		f.Close() // 确保文件关闭
 		return fmt.Errorf("write to %s: %s", fTemp, err.Error())
 	}
 
 	if err := writer.Flush(); err != nil {
+		f.Close() // 确保文件关闭
 		return fmt.Errorf("flush writer: %s", err.Error())
 	}
 
 	_ = f.Close()
 	if err = os.Rename(fTemp, fPath); err != nil {
 		return err
+	}
+
+	// 最后一次检查是否已停止，如果停止了就不更新进度
+	if d.stopped {
+		return nil
 	}
 
 	d.lock.Lock()
@@ -425,6 +548,14 @@ func (d *Downloader) download(segIndex int) error {
 func (d *Downloader) next() (segIndex int, end bool, err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
+
+	// 如果任务已停止，直接返回错误
+	if d.stopped {
+		err = fmt.Errorf("task stopped")
+		end = true
+		return
+	}
+
 	if len(d.queue) == 0 {
 		err = fmt.Errorf("queue empty")
 		if d.finish == int32(d.segLen) {
@@ -443,32 +574,71 @@ func (d *Downloader) next() (segIndex int, end bool, err error) {
 func (d *Downloader) back(segIndex int) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
+
+	// 如果任务已停止，不再将失败的分片放回队列
+	if d.stopped {
+		return fmt.Errorf("task stopped, segment %d not added back to queue", segIndex)
+	}
+
 	if sf := d.result.M3u8.Segments[segIndex]; sf == nil {
 		return fmt.Errorf("invalid segment index: %d", segIndex)
 	}
+
+	// 检查重试次数，超过最大重试次数则不再加入队列
+	d.retryCounter[segIndex]++
+	if d.retryCounter[segIndex] > maxRetryCount {
+		tool.Warning("[warning] segment %d exceeded max retry count (%d), skipping",
+			segIndex, maxRetryCount)
+		// 不将该分片加回队列，视为下载失败但继续其他分片的下载
+		return nil
+	}
+
 	d.queue = append(d.queue, segIndex)
 	return nil
 }
 
 func (d *Downloader) merge() error {
+	// 首先检查是否已停止
+	if d.stopped {
+		return fmt.Errorf("task stopped, merging aborted")
+	}
+
 	// In fact, the number of downloaded segments should be equal to number of m3u8 segments
 	missingCount := 0
+	var missingSegments []int
 	for idx := 0; idx < d.segLen; idx++ {
 		tsFilename := tsFilename(idx)
 		f := filepath.Join(d.tsFolder, tsFilename)
 		if _, err := os.Stat(f); err != nil {
 			missingCount++
+			missingSegments = append(missingSegments, idx)
 		}
 	}
-	if missingCount > 0 {
-		fmt.Printf("[warning] %d files missing\n", missingCount)
+
+	// 如果缺失文件太多，合并可能没有意义
+	if missingCount > d.segLen/2 {
+		return fmt.Errorf("too many missing segments (%d of %d), aborting merge",
+			missingCount, d.segLen)
 	}
 
-	// 准备所有TS文件名
-	tsFiles := make([]string, 0, d.segLen)
+	if missingCount > 0 {
+		tool.Warning("[warning] %d files missing. Segments: %v", missingCount, missingSegments)
+	}
+
+	// 准备所有存在的TS文件名
+	tsFiles := make([]string, 0, d.segLen-missingCount)
 	for segIndex := 0; segIndex < d.segLen; segIndex++ {
 		tsFilename := tsFilename(segIndex)
-		tsFiles = append(tsFiles, tsFilename)
+		tsPath := filepath.Join(d.tsFolder, tsFilename)
+		// 只添加存在的文件
+		if _, err := os.Stat(tsPath); err == nil {
+			tsFiles = append(tsFiles, tsFilename)
+		}
+	}
+
+	// 如果没有文件可以合并，直接返回错误
+	if len(tsFiles) == 0 {
+		return fmt.Errorf("no files to merge")
 	}
 
 	// 根据是否需要转换为MP4决定输出文件路径和扩展名
@@ -502,24 +672,23 @@ func (d *Downloader) merge() error {
 		d.Status = StatusConverting
 		d.Message = "正在合并为MP4格式..."
 
-		fmt.Printf("[info] 开始直接合并为MP4: %s\n", outputPath)
+		tool.Info("[info] 开始直接合并为MP4: %s", outputPath)
 
 		err := tool.MergeTsToMp4(d.tsFolder, tsFiles, outputPath)
 		if err != nil {
 			errMsg := fmt.Sprintf("合并MP4失败: %s", err.Error())
 			d.Message = errMsg
-			fmt.Println(errMsg)
+			tool.Error(errMsg)
 			return fmt.Errorf(errMsg)
 		}
 
-		fmt.Printf("[info] MP4合并成功: %s\n", outputPath)
+		tool.Info("[info] MP4合并成功: %s", outputPath)
 
 		// 更新任务完成消息
 		d.Message = fmt.Sprintf("下载完成并合并为MP4: %s", d.FileName)
 	} else {
 		// 优化的TS文件合并方法，使用分块处理
-		d.Message = "正在合并TS文件..."
-		fmt.Printf("[info] 开始合并TS文件: %s\n", outputPath)
+		tool.Info("[info] 开始合并TS文件: %s", outputPath)
 
 		// 创建输出文件
 		mFile, err := os.Create(outputPath)
@@ -536,16 +705,20 @@ func (d *Downloader) merge() error {
 		buffer := make([]byte, bufferSize)
 
 		mergedCount := 0
-		totalSegments := d.segLen
+		totalSegments := len(tsFiles)
 
-		for segIndex := 0; segIndex < totalSegments; segIndex++ {
-			tsFilename := tsFilename(segIndex)
+		for _, tsFilename := range tsFiles {
+			// 中途检查是否已停止
+			if d.stopped {
+				return fmt.Errorf("task stopped during merging")
+			}
+
 			tsFilePath := filepath.Join(d.tsFolder, tsFilename)
 
 			// 打开TS分片文件
 			tsFile, err := os.Open(tsFilePath)
 			if err != nil {
-				fmt.Printf("[warning] 无法打开文件 %s: %s\n", tsFilePath, err.Error())
+				tool.Warning("[warning] 无法打开文件 %s: %s", tsFilePath, err.Error())
 				continue
 			}
 
@@ -565,6 +738,10 @@ func (d *Downloader) merge() error {
 
 				// 检查是否读取完毕
 				if err != nil {
+					if err != io.EOF {
+						tsFile.Close()
+						tool.Warning("[warning] 读取文件 %s 时出错: %s", tsFilePath, err.Error())
+					}
 					break
 				}
 			}
@@ -581,23 +758,23 @@ func (d *Downloader) merge() error {
 
 		// 确保所有数据都写入到文件
 		if err := writer.Flush(); err != nil {
-			return fmt.Errorf("刷新缓冲区失败: %s", err.Error())
+			return fmt.Errorf("flush file error: %s", err.Error())
 		}
 
 		if mergedCount != totalSegments {
-			fmt.Printf("[warning] \n%d files merge failed\n", totalSegments-mergedCount)
+			tool.Warning("[warning] \n%d files merge failed", totalSegments-mergedCount)
 		}
 
 		// 更新任务完成消息
 		d.Message = fmt.Sprintf("下载完成: %s", outputFileName)
-		fmt.Printf("[info] TS合并成功: %s\n", outputPath)
+		tool.Info("[info] TS合并成功: %s", outputPath)
 	}
 
-	fmt.Printf("\n[output] %s\n", outputPath)
+	tool.Info("\n[output] %s", outputPath)
 
 	// 根据DeleteTs字段决定是否删除分片文件夹
 	if d.DeleteTs {
-		fmt.Printf("[info] 删除TS分片文件夹: %s\n", d.tsFolder)
+		tool.Info("[info] 删除TS分片文件夹: %s", d.tsFolder)
 		_ = os.RemoveAll(d.tsFolder)
 	}
 

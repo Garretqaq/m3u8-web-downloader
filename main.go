@@ -366,7 +366,7 @@ func setupCleanupHandler() {
 
 	go func() {
 		<-c
-		fmt.Println("程序退出，正在清理临时文件...")
+		tool.Info("程序退出，正在清理临时文件...")
 		tool.Cleanup()
 		os.Exit(0)
 	}()

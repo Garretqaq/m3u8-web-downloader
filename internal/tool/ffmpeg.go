@@ -267,7 +267,7 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 	var tempOutputs []string
 	batchCount := (len(allTsFiles) + batchSize - 1) / batchSize
 
-	fmt.Printf("文件数量过多 (%d 个文件)，采用分批处理策略，共 %d 批\n", len(allTsFiles), batchCount)
+	Info("文件数量过多 (%d 个文件)，采用分批处理策略，共 %d 批", len(allTsFiles), batchCount)
 
 	// 创建临时目录存放中间文件
 	tempDir := filepath.Join(tsFolder, "temp_batch_merge")
@@ -348,7 +348,7 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 			// 线程安全地记录输出文件
 			batchOutputs[batchIndex] = tempOutput
 
-			fmt.Printf("处理第 %d/%d 批 (文件 %d-%d)\n", batchIndex+1, batchCount, start, end-1)
+			Info("处理第 %d/%d 批 (文件 %d-%d)", batchIndex+1, batchCount, start, end-1)
 
 			// 对每批次单独进行合并
 			listFilePath := filepath.Join(tempDir, fmt.Sprintf("filelist_%d.txt", batchIndex))
@@ -477,7 +477,7 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 	tempOutputs = batchOutputs
 
 	// 最后合并所有临时文件为最终输出
-	fmt.Println("正在合并所有批次为最终MP4文件...")
+	Info("正在合并所有批次为最终MP4文件...")
 
 	// 创建最终合并上下文
 	finalCtx, finalCancel := context.WithTimeout(ctx, 15*time.Minute)
@@ -489,7 +489,7 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 
 	if len(tempOutputs) == 1 {
 		// 只有一个批次文件，直接转换为MP4
-		fmt.Println("只有一个临时文件，直接转换为MP4...")
+		Info("只有一个临时文件，直接转换为MP4...")
 		tempFile := tempOutputs[0]
 		ffmpegCmd := ffmpeg.Input(tempFile).
 			Output(finalOutputPath, mp4OutputOptions).
@@ -499,7 +499,7 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 		execCmd = exec.CommandContext(finalCtx, cmd.Args[0], cmd.Args[1:]...)
 	} else if len(tempOutputs) == 2 {
 		// 两个批次文件，使用concat filter更可靠
-		fmt.Println("使用concat filter合并两个临时文件...")
+		Info("使用concat filter合并两个临时文件...")
 
 		// 确保参数中不包含可能导致问题的硬件加速
 		safeOptions := CopyKwArgs(mp4OutputOptions)
@@ -563,7 +563,7 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 	execCmd.Stderr = &stderr
 
 	// 启动最终合并命令
-	fmt.Println("开始执行最终合并...")
+	Info("开始执行最终合并...")
 	if err := execCmd.Start(); err != nil {
 		return fmt.Errorf("启动最终合并进程失败: %w", err)
 	}
@@ -579,23 +579,23 @@ func mergeTsInBatchesWithContext(ctx context.Context, tsFolder string, allTsFile
 
 	// 如果常规合并失败，尝试备用合并方法
 	if mergeErr != nil {
-		fmt.Printf("常规合并失败: %v，尝试直接连接文件...\n", mergeErr)
+		Warning("常规合并失败: %v，尝试直接连接文件...", mergeErr)
 
 		// 尝试直接连接文件（适用于某些视频格式）
 		if len(tempOutputs) == 2 {
-			fmt.Println("尝试直接连接二进制文件...")
+			Info("尝试直接连接二进制文件...")
 			concatErr := concatenateBinaryFiles(tempOutputs, finalOutputPath)
 			if concatErr != nil {
 				return fmt.Errorf("合并失败: %w，连接文件也失败: %v", mergeErr, concatErr)
 			} else {
-				fmt.Println("使用二进制连接成功！")
+				Info("使用二进制连接成功！")
 			}
 		} else {
 			return fmt.Errorf("合并多个批次文件失败: %w, 错误: %s", mergeErr, stderr.String())
 		}
 	}
 
-	fmt.Println("合并完成!")
+	Info("合并完成!")
 
 	return nil
 }
@@ -677,7 +677,7 @@ func DirectMergeFromM3u8WithContext(ctx context.Context, m3u8URL, outputPath str
 
 	// 开始下载
 	startTime := time.Now()
-	fmt.Printf("开始从M3U8下载视频: %s\n", m3u8URL)
+	Info("开始从M3U8下载视频: %s", m3u8URL)
 
 	// 尝试最多3次
 	var err error
@@ -688,7 +688,7 @@ func DirectMergeFromM3u8WithContext(ctx context.Context, m3u8URL, outputPath str
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 30*time.Minute)
 
 		if attempt > 1 {
-			fmt.Printf("第%d次重试下载...\n", attempt)
+			Info("第%d次重试下载...", attempt)
 			// 每次重试前等待一段时间
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
@@ -724,7 +724,7 @@ func DirectMergeFromM3u8WithContext(ctx context.Context, m3u8URL, outputPath str
 			break // 成功则退出循环
 		}
 
-		fmt.Printf("下载尝试 %d/%d 失败: %v\n错误输出: %s\n", attempt, maxRetries, err, stderr.String())
+		Warning("下载尝试 %d/%d 失败: %v\n错误输出: %s", attempt, maxRetries, err, stderr.String())
 	}
 
 	if err != nil {
@@ -733,7 +733,7 @@ func DirectMergeFromM3u8WithContext(ctx context.Context, m3u8URL, outputPath str
 
 	// 计算总用时
 	duration := time.Since(startTime)
-	fmt.Printf("下载完成，总用时: %s\n", duration.String())
+	Info("下载完成，总用时: %s", duration.String())
 
 	return nil
 }
