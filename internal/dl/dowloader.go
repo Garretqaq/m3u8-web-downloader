@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -624,25 +623,4 @@ func genSlice(len int) []int {
 		s = append(s, i)
 	}
 	return s
-}
-
-// 计算指定目录中所有TS文件的总大小
-func getTotalDownloadedBytes(dirPath string) int64 {
-	var totalSize int64 = 0
-
-	// 读取目录中的所有文件
-	files, err := ioutil.ReadDir(dirPath)
-	if err != nil {
-		fmt.Printf("读取下载目录失败: %s\n", err.Error())
-		return 0
-	}
-
-	// 累加每个ts文件的大小
-	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".ts") {
-			totalSize += file.Size()
-		}
-	}
-
-	return totalSize
 }

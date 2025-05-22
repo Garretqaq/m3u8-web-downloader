@@ -12,9 +12,7 @@ RUN go mod download
 
 # 复制源代码
 COPY main.go .
-COPY dl/ ./dl/
-COPY tool/ ./tool/
-COPY parse/ ./parse/
+COPY internal/ ./internal/
 
 # 复制预构建的前端文件
 COPY web/dist/ ./web/dist/

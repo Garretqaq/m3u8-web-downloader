@@ -162,8 +162,7 @@ func (tm *TaskManager) checkQueuedTasks() {
 
 	// 检查当前可用槽位数
 	availableSlots := tm.maxConcurrent - len(tm.downloadingSem)
-	fmt.Printf("[队列处理] 当前可用下载槽位: %d (最大:%d, 使用中:%d)\n",
-		availableSlots, tm.maxConcurrent, len(tm.downloadingSem))
+	fmt.Printf("[队列处理] 当前可用下载槽位: %d (最大:%d, 使用中:%d)\n", availableSlots, tm.maxConcurrent, len(tm.downloadingSem))
 
 	if availableSlots <= 0 {
 		fmt.Println("[队列处理] 无可用下载槽位，等待中...")
