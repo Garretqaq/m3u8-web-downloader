@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"m3u8-go/config"
+	"m3u8-go/internal/config"
 )
 
 // TaskManager 管理所有下载任务

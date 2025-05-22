@@ -3,10 +3,10 @@ package parse
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/url"
 
-	"m3u8-go/tool"
+	"m3u8-go/internal/tool"
 )
 
 type Result struct {
@@ -56,7 +56,7 @@ func FromURL(link string) (*Result, error) {
 			if err != nil {
 				return nil, fmt.Errorf("extract key failed: %s", err.Error())
 			}
-			keyByte, err := ioutil.ReadAll(resp)
+			keyByte, err := io.ReadAll(resp)
 			_ = resp.Close()
 			if err != nil {
 				return nil, err

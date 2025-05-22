@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"m3u8-go/config"
-	"m3u8-go/parse"
-	"m3u8-go/tool"
+	"m3u8-go/internal/config"
+	"m3u8-go/internal/parse"
+	"m3u8-go/internal/tool"
 )
 
 const (

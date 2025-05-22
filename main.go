@@ -9,9 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"m3u8-go/config"
-	"m3u8-go/dl"
-	"m3u8-go/tool"
+	"m3u8-go/internal/config"
+	"m3u8-go/internal/dl"
+	"m3u8-go/internal/tool"
 
 	"github.com/gin-gonic/gin"
 )
