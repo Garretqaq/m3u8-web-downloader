@@ -130,15 +130,15 @@
                     <a-slider
                       v-model:value="formState.downloadSpeedLimit"
                       :min="0"
-                      :max="10240"
-                      :marks="{ 0: '', 1024: '1MB/s', 5120: '5MB/s', 10240: '10MB/s' }"
+                      :max="51200"
+                      :marks="{ 0: '不限制', 10240: '10MB/s', 51200: '50MB/s' }"
                       class="thread-slider"
                       :tip-formatter="value => value === 0 ? '不限制' : `${value} KB/s`"
                     />
                     <a-input-number
                       v-model:value="formState.downloadSpeedLimit"
                       :min="0"
-                      :max="20480"
+                      :max="51200"
                       style="width: 90px;"
                       size="middle"
                       class="thread-input"
@@ -579,6 +579,27 @@ onMounted(() => {
 
 .thread-slider {
   flex: 1;
+}
+
+/* 优化滑块刻度标记样式 */
+:deep(.ant-slider-mark-text) {
+  font-size: 12px;
+  font-weight: 500;
+  width: auto !important;
+  min-width: 45px;
+  text-align: center;
+}
+
+:deep(.ant-slider-mark-text:first-child) {
+  transform: translateX(0%) !important;
+  left: 0% !important;
+  text-align: left;
+}
+
+:deep(.ant-slider-mark-text:last-child) {
+  transform: translateX(-100%) !important;
+  left: 100% !important;
+  text-align: right;
 }
 
 .speed-labels {
