@@ -31,7 +31,7 @@ const (
 	StatusSuccess     = "success"     // 下载成功
 	StatusFailed      = "failed"      // 下载失败
 	StatusPending     = "pending"     // 等待下载
-	StatusStopped     = "stopped"     // 已停止
+	StatusUnfinished  = "unfinished"  // 下载未完成（替代原来的stopped状态）
 	StatusConverting  = "converting"  // 正在转换格式
 )
 
@@ -160,6 +160,16 @@ func (d *Downloader) Start(concurrency int) error {
 	d.stopChan = make(chan struct{})   // 重新创建停止通道
 	d.retryCounter = make(map[int]int) // 重置重试计数器
 
+	// 获取限速设置并记录日志
+	taskManager := GetTaskManager()
+	speedLimit := taskManager.GetDownloadSpeedLimit()
+	if speedLimit > 0 {
+		tool.Info("[任务 %s] 启动下载 - 线程数: %d, 全局限速: %d KB/s",
+			d.ID, concurrency, speedLimit)
+	} else {
+		tool.Info("[任务 %s] 启动下载 - 线程数: %d, 不限速", d.ID, concurrency)
+	}
+
 	var wg sync.WaitGroup
 	// struct{} zero size
 	limitChan := make(chan struct{}, concurrency)
@@ -171,21 +181,25 @@ func (d *Downloader) Start(concurrency int) error {
 	go func() {
 		<-d.stopChan
 		d.lock.Lock()
+		// 只标记队列清空和停止标志，但不修改任务状态
 		d.queue = nil // 清空队列
-		d.Status = StatusStopped
-		d.Message = "下载已停止"
 		d.stopped = true
 		stopFlag = true
+		tool.Info("[task %s] 收到停止信号，仅中断下载流程", d.ID)
 		d.lock.Unlock()
-		tool.Info("[task %s] 收到停止信号", d.ID)
 	}()
 
 	// 设置清理函数，确保在函数退出时总是能等待所有协程完成
 	defer func() {
-		// 如果函数退出但没有正常结束，标记为已停止
+		// 如果函数退出但没有正常结束，保持当前状态，不设置为"已停止"
+		d.lock.Lock()
 		if d.Status != StatusSuccess && d.Status != StatusFailed {
-			d.Status = StatusStopped
+			// 如果没有成功或失败，保持当前状态，但记录中断
+			if d.Message == "" {
+				d.Message = "下载未完成"
+			}
 		}
+		d.lock.Unlock()
 
 		// 等待所有工作协程完成，添加超时保护
 		waitChan := make(chan struct{})
@@ -202,15 +216,27 @@ func (d *Downloader) Start(concurrency int) error {
 			tool.Warning("[task %s] 等待协程超时，可能有泄漏的协程", d.ID)
 		}
 
-		// 确保stopChan被关闭
+		// 确保stopChan被关闭，但不修改任务状态
 		d.lock.Lock()
+		currentStatus := d.Status
 		select {
 		case <-d.stopChan:
 			// 已经关闭，不需要再次关闭
 		default:
 			close(d.stopChan)
 		}
-		d.stopped = true
+
+		// 标记为已停止内部状态，但不修改对外显示的状态
+		if currentStatus != StatusSuccess && currentStatus != StatusFailed {
+			d.stopped = true
+		} else if currentStatus == StatusSuccess {
+			// 确保成功状态下消息正确
+			if d.ConvertToMp4 {
+				d.Message = fmt.Sprintf("下载完成并合并为MP4: %s", d.FileName)
+			} else {
+				d.Message = fmt.Sprintf("下载完成: %s", d.FileName)
+			}
+		}
 		d.lock.Unlock()
 	}()
 
@@ -320,9 +346,18 @@ downloadLoop:
 		return err
 	}
 
-	d.Status = StatusSuccess
-	d.Message = "下载完成"
+	// 确保下载成功时状态一致，修复多文件合并后显示已停止的bug
+	d.lock.Lock()
+	prevStatus := d.Status
+	d.Status = StatusSuccess // 确保设置状态为成功
+	d.Message = "下载完成"       // 恢复消息设置
 	d.Progress = 100
+	d.stopped = false // 重置停止标志，确保不会被误标记为已停止
+	d.lock.Unlock()
+
+	// 添加状态转换日志，便于调试
+	tool.Info("[任务 %s] 状态已从 %s 更新为 %s", d.ID, prevStatus, StatusSuccess)
+
 	return nil
 }
 
@@ -331,8 +366,13 @@ func (d *Downloader) Stop() {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	// 只有当任务未停止且处于下载中或等待状态时才停止
-	if !d.stopped && (d.Status == StatusDownloading || d.Status == StatusPending) {
+	// 不对已成功或失败的任务执行停止操作
+	if d.Status == StatusSuccess || d.Status == StatusFailed {
+		return
+	}
+
+	// 只标记内部停止状态并关闭通道，不修改任务状态
+	if !d.stopped {
 		// 重要：需要确保 stopChan 只关闭一次
 		select {
 		case <-d.stopChan:
@@ -340,24 +380,27 @@ func (d *Downloader) Stop() {
 		default:
 			close(d.stopChan)
 			d.stopped = true
-			d.Status = StatusStopped
-			d.Message = "下载已停止"
-			tool.Info("[task %s] 下载已停止", d.ID)
+			tool.Info("[task %s] 下载过程已中断", d.ID)
 		}
 	}
 }
 
 // DeleteFiles 删除任务相关文件
 func (d *Downloader) DeleteFiles() error {
-	// 如果任务正在下载，先停止下载
-	if d.Status == StatusDownloading || d.Status == StatusConverting {
-		d.Stop()
+	// 如果任务正在下载或转换，先终止下载过程
+	d.lock.Lock()
+
+	// 标记为已停止内部状态，但不修改对外状态
+	d.stopped = true
+
+	// 关闭停止通道
+	select {
+	case <-d.stopChan:
+		// 已经关闭
+	default:
+		close(d.stopChan)
 	}
 
-	// 确保标记任务为已停止状态
-	d.lock.Lock()
-	d.stopped = true
-	d.Status = StatusStopped
 	d.lock.Unlock()
 
 	var errs []string
@@ -401,7 +444,8 @@ func (d *Downloader) DeleteFiles() error {
 // Resume 继续下载任务
 func (d *Downloader) Resume() bool {
 	d.lock.Lock()
-	if d.Status != StatusStopped {
+	// 检查是否已被标记为内部停止状态
+	if !d.stopped {
 		d.lock.Unlock()
 		return false
 	}
@@ -412,6 +456,7 @@ func (d *Downloader) Resume() bool {
 	// 先恢复状态为等待中
 	d.Status = StatusPending
 	d.Message = "排队等待下载"
+	d.stopped = false
 	d.lock.Unlock()
 
 	// 使用任务队列管理机制重新启动任务
@@ -434,7 +479,28 @@ func (d *Downloader) download(segIndex int) error {
 
 	tsFilename := tsFilename(segIndex)
 	tsUrl := d.tsURL(segIndex)
-	b, e := tool.Get(tsUrl)
+
+	// 获取任务管理器中设置的下载速度限制
+	taskManager := GetTaskManager()
+	speedLimit := taskManager.GetDownloadSpeedLimit()
+
+	// 使用速度限制选项调用Get
+	var b io.ReadCloser
+	var e error
+
+	// 记录限速日志（只对部分分片记录，避免大量日志）
+	if segIndex == 0 || segIndex%50 == 0 {
+		if speedLimit > 0 {
+			tool.Info("[限速] 任务 %s：全局限速 %d KB/s，线程数 %d，实际每线程限速约 %.1f KB/s",
+				d.ID, speedLimit, d.C, float64(speedLimit)/float64(d.C))
+		} else {
+			tool.Info("[限速] 任务 %s：不限速", d.ID)
+		}
+	}
+
+	// 使用全局限速的 Get 方法，不再需要传入限速参数
+	b, e = tool.Get(tsUrl)
+
 	if e != nil {
 		return fmt.Errorf("request %s, %s", tsUrl, e.Error())
 	}
@@ -686,6 +752,16 @@ func (d *Downloader) merge() error {
 
 		// 更新任务完成消息
 		d.Message = fmt.Sprintf("下载完成并合并为MP4: %s", d.FileName)
+
+		// 确保设置状态为成功，修复格式转换完成后显示"已停止"的bug
+		d.lock.Lock()
+		prevStatus := d.Status
+		d.Status = StatusSuccess
+		d.stopped = false // 重置停止标志，确保不会被误标记为已停止
+		d.lock.Unlock()
+
+		// 添加状态转换日志，便于调试
+		tool.Info("[任务 %s] MP4转换完成：状态从 %s 更新为 %s", d.ID, prevStatus, StatusSuccess)
 	} else {
 		// 优化的TS文件合并方法，使用分块处理
 		tool.Info("[info] 开始合并TS文件: %s", outputPath)
@@ -778,9 +854,16 @@ func (d *Downloader) merge() error {
 		_ = os.RemoveAll(d.tsFolder)
 	}
 
-	// 设置任务状态为成功
-	d.Status = StatusSuccess
+	// 确保任务状态被设置为成功，解决多文件下载后合并完成但显示为"已停止"的问题
+	d.lock.Lock()
+	prevStatus := d.Status
+	d.Status = StatusSuccess // 确保设置状态为成功
+	d.stopped = false        // 重置停止标志，确保不会被误标记为已停止
 	d.Progress = 100
+	d.lock.Unlock()
+
+	// 添加状态转换日志，便于调试
+	tool.Info("[任务 %s] 状态已从 %s 更新为 %s", d.ID, prevStatus, StatusSuccess)
 
 	return nil
 }

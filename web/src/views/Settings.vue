@@ -146,6 +146,10 @@
                   </div>
                   <!-- Slider 已直接显示刻度标签，无需额外文字 -->
                   <div class="form-extra">设置为0表示不限制下载速度，建议根据网络带宽合理设置</div>
+                  <div class="form-extra speed-limit-note">
+                    <InfoCircleOutlined style="color: #1890ff; margin-right: 5px;" />
+                    全局限速在多线程下载时将共享总带宽，实际运行时各下载线程平均分配限速值
+                  </div>
                 </a-form-item>
               </div>
             </div>
@@ -231,7 +235,8 @@ import {
   DeleteOutlined,
   SettingOutlined,
   ThunderboltOutlined,
-  FileOutlined
+  FileOutlined,
+  InfoCircleOutlined
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import axios from 'axios'
@@ -530,6 +535,17 @@ onMounted(() => {
 
 .paste-button:hover svg path {
   fill: #ffffff;
+}
+
+.speed-limit-note {
+  margin-top: 8px;
+  border-left: 3px solid #1890ff;
+  padding-left: 8px;
+  color: #1890ff;
+  background-color: #e6f7ff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
 }
 
 /* 粘贴动画效果 */

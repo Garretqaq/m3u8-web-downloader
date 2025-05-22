@@ -56,9 +56,13 @@ func main() {
 		taskManager.UpdateMaxConcurrentDownloads(settings.MaxConcurrentDownload)
 	}
 
-	// 设置下载速度限制
+	// 设置下载速度限制 - 这里会调用新的全局限速配置
 	if settings.DownloadSpeedLimit >= 0 {
+		// 通过 taskManager 设置限速，它内部会调用 tool.ConfigureGlobalRateLimiter
 		taskManager.UpdateDownloadSpeedLimit(settings.DownloadSpeedLimit)
+		tool.Info("[启动] 初始化全局限速为 %d KB/s", settings.DownloadSpeedLimit)
+	} else {
+		tool.Info("[启动] 全局限速未设置或无效，无限速")
 	}
 
 	// 使用 gin.New() 替代 gin.Default() 以关闭默认日志

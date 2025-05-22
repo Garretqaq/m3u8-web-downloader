@@ -76,10 +76,48 @@ func (tm *TaskManager) UpdateMaxConcurrentDownloads(max int) {
 		max = 10
 	}
 
+	// 如果最大并发下载数量发生变化
 	if tm.maxConcurrent != max {
+		oldMax := tm.maxConcurrent
+		oldUsed := len(tm.downloadingSem)
+
 		tm.maxConcurrent = max
 		// 重新初始化信号量
-		tm.downloadingSem = make(chan struct{}, max)
+		newSem := make(chan struct{}, max)
+
+		// 迁移现有的槽位占用
+		// 将旧信号量中的内容尽可能转移到新信号量中
+		migratedCount := 0
+
+		// 如果新容量小于已使用槽位数，只能迁移部分
+		transferCount := oldUsed
+		if transferCount > max {
+			transferCount = max
+		}
+
+		// 迁移槽位
+		for i := 0; i < transferCount; i++ {
+			select {
+			case <-tm.downloadingSem:
+				newSem <- struct{}{}
+				migratedCount++
+			default:
+				// 理论上不会走到这里，因为我们确切知道有多少槽位使用中
+				break
+			}
+		}
+
+		// 更新信号量
+		tm.downloadingSem = newSem
+
+		tool.Info("[任务管理器] 更新最大同时下载数量: %d → %d (已使用槽位: %d, 已迁移: %d)",
+			oldMax, max, oldUsed, migratedCount)
+
+		// 如果仍有已使用槽位无法迁移（即新容量小于旧已用量），记录日志
+		if oldUsed > max {
+			tool.Warning("[任务管理器] 新容量(%d)小于已使用槽位数(%d)，%d个下载中任务将在完成后不再占用槽位",
+				max, oldUsed, oldUsed-max)
+		}
 
 		// 重新处理队列中的任务
 		go tm.checkQueuedTasks()
@@ -96,8 +134,73 @@ func (tm *TaskManager) UpdateDownloadSpeedLimit(limit int) {
 		limit = 0
 	}
 
-	tool.Info("[任务管理器] 更新下载速度限制为 %d KB/s", limit)
+	// 记录之前的状态，用于后续处理
+	oldLimit := tm.speedLimit
+	wasLimited := oldLimit > 0
+	nowLimited := limit > 0
+
+	// 更新限制值
 	tm.speedLimit = limit
+
+	// 根据不同场景记录日志
+	if wasLimited && !nowLimited {
+		tool.Info("[任务管理器] 禁用下载速度限制 (原限制: %d KB/s)", oldLimit)
+	} else if !wasLimited && nowLimited {
+		tool.Info("[任务管理器] 启用下载速度限制: %d KB/s", limit)
+	} else if wasLimited && nowLimited && oldLimit != limit {
+		tool.Info("[任务管理器] 更新下载速度限制: %d → %d KB/s", oldLimit, limit)
+	} else if oldLimit == limit {
+		if limit > 0 {
+			tool.Info("[任务管理器] 重新应用相同下载速度限制: %d KB/s", limit)
+		} else {
+			tool.Info("[任务管理器] 确认下载速度不受限制")
+		}
+	}
+
+	// 调用全局限速器进行配置
+	tool.ConfigureGlobalRateLimiter(int64(limit))
+
+	// 特殊情况处理
+	if wasLimited && !nowLimited {
+		// 从有限速变为无限速的情况
+		tool.Info("[任务管理器] 检测到禁用限速，确保立即生效")
+
+		// 给禁用信号一些时间传播
+		time.Sleep(50 * time.Millisecond)
+
+		// 对所有正在下载的任务记录日志
+		for _, task := range tm.tasks {
+			if task != nil && task.Status == StatusDownloading {
+				tool.Info("[限速更新] 任务 %s: 已禁用限速", task.ID)
+			}
+		}
+	} else if oldLimit == limit && limit > 0 {
+		// 重复设置相同限速值的情况
+		tool.Info("[任务管理器] 检测到重复设置相同限速值，强制刷新限速器状态")
+		tool.RefreshGlobalRateLimiter()
+	}
+
+	// 统计活跃任务并更新限速信息
+	activeTasks := 0
+	for _, task := range tm.tasks {
+		if task != nil && task.Status == StatusDownloading {
+			activeTasks++
+			// 只在有限速时记录限速信息
+			if limit > 0 {
+				tool.Info("[限速更新] 任务 %s：全局限速已更新为 %d KB/s", task.ID, limit)
+			}
+		}
+	}
+
+	// 汇总活跃任务的限速情况
+	if activeTasks > 0 {
+		if limit > 0 {
+			tool.Info("[限速统计] 当前有 %d 个下载中任务，全局限速 %d KB/s 已应用",
+				activeTasks, limit)
+		} else {
+			tool.Info("[限速统计] 当前有 %d 个下载中任务，全局限速已禁用", activeTasks)
+		}
+	}
 }
 
 // GetDownloadSpeedLimit 获取当前下载速度限制
@@ -162,8 +265,9 @@ func (tm *TaskManager) checkQueuedTasks() {
 	tool.Debug("[队列处理] 开始处理等待队列，当前队列长度: %d", queueLength)
 
 	// 检查当前可用槽位数
-	availableSlots := tm.maxConcurrent - len(tm.downloadingSem)
-	tool.Debug("[队列处理] 当前可用下载槽位: %d (最大:%d, 使用中:%d)", availableSlots, tm.maxConcurrent, len(tm.downloadingSem))
+	availableSlots := cap(tm.downloadingSem) - len(tm.downloadingSem)
+	tool.Debug("[队列处理] 当前可用下载槽位: %d (最大:%d, 使用中:%d)",
+		availableSlots, cap(tm.downloadingSem), len(tm.downloadingSem))
 
 	if availableSlots <= 0 {
 		tool.Debug("[队列处理] 无可用下载槽位，等待中...")
@@ -234,18 +338,27 @@ func (tm *TaskManager) EnqueueDownload(task *Downloader) {
 	task.Status = StatusPending
 	task.Message = "排队等待下载"
 
+	// 记录当前可用槽位情况
+	availableSlots := cap(tm.downloadingSem) - len(tm.downloadingSem)
+	tool.Info("[队列] 任务 %s 入队，当前可用槽位: %d (容量: %d, 使用中: %d)",
+		task.ID, availableSlots, cap(tm.downloadingSem), len(tm.downloadingSem))
+
 	// 尝试立即下载，如果槽位已满则加入队列
 	select {
 	case tm.downloadingSem <- struct{}{}:
 		// 有可用槽位，直接开始下载
 		task.Status = StatusDownloading
 		task.Message = "正在下载"
+		tool.Info("[队列] 任务 %s 直接获取槽位开始下载，剩余可用槽位: %d",
+			task.ID, cap(tm.downloadingSem)-len(tm.downloadingSem)-1)
 
 		// 异步开始下载
 		go func(t *Downloader) {
 			defer func() {
 				// 下载完成后释放槽位
 				<-tm.downloadingSem
+				tool.Info("[队列] 任务 %s 完成，释放槽位，当前可用槽位: %d",
+					t.ID, cap(tm.downloadingSem)-len(tm.downloadingSem)+1)
 				// 下载完成后检查队列，可能有等待的任务
 				tm.checkQueuedTasks()
 			}()
@@ -261,7 +374,8 @@ func (tm *TaskManager) EnqueueDownload(task *Downloader) {
 		tm.downloadQueue = append(tm.downloadQueue, task)
 		tm.queueLock.Unlock()
 
-		tool.Info("[队列] 任务 %s 加入下载队列，当前队列长度: %d", task.ID, len(tm.downloadQueue))
+		tool.Info("[队列] 任务 %s 加入下载队列，当前队列长度: %d，所有槽位已占满",
+			task.ID, len(tm.downloadQueue))
 	}
 }
 

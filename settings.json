@@ -4,5 +4,5 @@
   "defaultConvertToMp4": true,
   "defaultDeleteTs": true,
   "maxConcurrentDownload": 1,
-  "downloadSpeedLimit": 0
+  "downloadSpeedLimit": 500
 }

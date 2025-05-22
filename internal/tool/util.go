@@ -2,13 +2,13 @@ package tool
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // 日志级别常量
@@ -19,28 +19,32 @@ const (
 	LogLevelError
 )
 
+// 获取东八区时区
+var cstZone = time.FixedZone("CST", 8*3600) // 东八区，即UTC+8
+
 // 日志相关变量
 var (
 	// 当前日志级别，默认为Info
 	currentLogLevel = LogLevelInfo
 
-	// 各级别的logger
-	debugLogger   *log.Logger
-	infoLogger    *log.Logger
-	warningLogger *log.Logger
-	errorLogger   *log.Logger
+	// 不同日志级别的前缀
+	debugPrefix   = "[DEBUG] "
+	infoPrefix    = "[INFO] "
+	warningPrefix = "[WARN] "
+	errorPrefix   = "[ERROR] "
 )
+
+// 格式化时间戳为东八区时间
+func formatTimeCST(t time.Time) string {
+	return t.In(cstZone).Format("2006/01/02 15:04:05.000")
+}
 
 // 初始化日志系统
 func init() {
-	// 设置标准库日志格式：显示日期、时间、毫秒和时区
-	logFlags := log.Ldate | log.Ltime | log.Lmicroseconds | log.LUTC
-
-	// 创建不同级别的logger
-	debugLogger = log.New(os.Stdout, "[DEBUG] ", logFlags)
-	infoLogger = log.New(os.Stdout, "[INFO] ", logFlags)
-	warningLogger = log.New(os.Stdout, "[WARN] ", logFlags)
-	errorLogger = log.New(os.Stderr, "[ERROR] ", logFlags)
+	// 尝试从IANA时区数据库加载亚洲/上海时区
+	if zone, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		cstZone = zone
+	}
 }
 
 // SetLogLevel 设置当前日志级别
@@ -51,28 +55,28 @@ func SetLogLevel(level int) {
 // Debug 打印调试信息
 func Debug(format string, args ...interface{}) {
 	if currentLogLevel <= LogLevelDebug {
-		debugLogger.Printf(format, args...)
+		fmt.Printf("%s %s%s\n", formatTimeCST(time.Now()), debugPrefix, fmt.Sprintf(format, args...))
 	}
 }
 
 // Info 打印普通信息
 func Info(format string, args ...interface{}) {
 	if currentLogLevel <= LogLevelInfo {
-		infoLogger.Printf(format, args...)
+		fmt.Printf("%s %s%s\n", formatTimeCST(time.Now()), infoPrefix, fmt.Sprintf(format, args...))
 	}
 }
 
 // Warning 打印警告信息
 func Warning(format string, args ...interface{}) {
 	if currentLogLevel <= LogLevelWarning {
-		warningLogger.Printf(format, args...)
+		fmt.Printf("%s %s%s\n", formatTimeCST(time.Now()), warningPrefix, fmt.Sprintf(format, args...))
 	}
 }
 
 // Error 打印错误信息
 func Error(format string, args ...interface{}) {
 	if currentLogLevel <= LogLevelError {
-		errorLogger.Printf(format, args...)
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", formatTimeCST(time.Now()), errorPrefix, fmt.Sprintf(format, args...))
 	}
 }
 
@@ -129,8 +133,6 @@ func DrawProgressBar(prefix string, proportion float32, width int, suffix ...str
 	s := fmt.Sprintf("%s%*s %6.2f%% %s",
 		strings.Repeat("■", pos), width-pos, "", proportion*100, strings.Join(suffix, ""))
 
-	// 使用Info记录进度条信息而不是直接打印
-	if currentLogLevel <= LogLevelInfo {
-		fmt.Printf("\r[%s] %s", prefix, s)
-	}
+	// 直接打印进度条，不使用日志记录
+	fmt.Printf("\r[%s] %s", prefix, s)
 }

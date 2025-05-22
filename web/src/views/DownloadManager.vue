@@ -13,6 +13,9 @@
             </a-typography-paragraph>
           </div>
           <div class="action-buttons">
+            <a-tag v-if="speedLimit > 0" color="orange" class="global-limit-tag">
+              <ThunderboltOutlined /> 全局限速: {{ formatLimit(speedLimit) }}
+            </a-tag>
             <a-button @click="refreshTasks" :loading="store.refreshing" type="default" class="btn-with-effect" size="middle">
               <template #icon><ReloadOutlined :spin="store.refreshing" /></template>
               刷新列表
@@ -58,7 +61,6 @@
                         <LoadingOutlined v-if="task.status === 'downloading' || task.status === 'converting'" spin />
                         <CheckCircleOutlined v-else-if="task.status === 'success'" />
                         <CloseCircleOutlined v-else-if="task.status === 'failed'" />
-                        <PauseCircleOutlined v-else-if="task.status === 'stopped'" />
                         <ClockCircleOutlined v-else />
                       </span>
                       {{ statusTexts[task.status] || task.status }}
@@ -120,7 +122,6 @@
                     <span class="speed-icon"><ThunderboltOutlined /></span>
                     <span class="speed-text">{{ formatSpeed(task.speed) }}</span>
                     <a-tag color="#1890ff" class="speed-tag">速度</a-tag>
-                    <a-tag v-if="speedLimit > 0" color="orange" class="limit-tag">限速 {{ formatLimit(speedLimit) }}</a-tag>
                   </div>
                   
                   <a-progress 
@@ -378,7 +379,6 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  PauseCircleOutlined,
   ClockCircleOutlined,
   SettingOutlined,
   UpOutlined,
@@ -424,7 +424,7 @@ const statusColors = {
   'converting': 'purple',
   'success': 'success',
   'failed': 'error',
-  'stopped': 'warning'
+  'unfinished': 'orange'
 }
 
 // 状态文本映射
@@ -434,7 +434,7 @@ const statusTexts = {
   'converting': '格式转换中',
   'success': '下载完成',
   'failed': '下载失败',
-  'stopped': '已停止'
+  'unfinished': '下载未完成'
 }
 
 // localStorage键名
@@ -448,17 +448,18 @@ onMounted(() => {
       store.initialLoading = false
     })
   
+  // 加载全局设置，获取限速
+  fetchGlobalSettings()
+  
   // 每1秒刷新一次任务列表
   refreshInterval = setInterval(() => {
     store.fetchTasks()
-  }, 1000)
-
-  // 加载全局设置，获取限速
-  axios.get('/api/settings').then(res => {
-    if (res.data.success) {
-      speedLimit.value = res.data.data?.downloadSpeedLimit || 0
+    
+    // 每15秒更新一次全局设置（包括限速信息）
+    if (new Date().getSeconds() % 15 === 0) {
+      fetchGlobalSettings()
     }
-  }).catch(() => {})
+  }, 1000)
 })
 
 // 组件卸载时清除定时器
@@ -750,6 +751,15 @@ const clearCompletedTasks = async () => {
 const hasCompletedTasks = computed(() => {
   return store.tasks.some(task => task.status === 'success')
 })
+
+// 获取全局设置的函数
+const fetchGlobalSettings = () => {
+  axios.get('/api/settings').then(res => {
+    if (res.data.success) {
+      speedLimit.value = res.data.data?.downloadSpeedLimit || 0
+    }
+  }).catch(() => {})
+}
 </script>
 
 <style scoped>
@@ -1391,11 +1401,23 @@ a-progress :deep(.ant-progress-outer) {
 }
 
 .limit-tag {
+  margin-left: 8px;
   font-size: 12px;
-  line-height: 14px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 10px;
-  margin-left: 4px;
+}
+
+.global-limit-tag {
+  margin-right: 12px;
+  font-size: 13px;
+  padding: 4px 10px;
+  height: auto;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.global-limit-tag :deep(.anticon) {
+  font-size: 14px;
 }
 </style> 
