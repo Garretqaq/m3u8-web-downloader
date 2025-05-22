@@ -2,7 +2,9 @@ package dl
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"m3u8-go/config"
 	"m3u8-go/parse"
 	"m3u8-go/tool"
 )
@@ -40,18 +43,19 @@ type Downloader struct {
 	finish   int32
 	segLen   int
 
-	ID           string  // 任务ID
-	Progress     int     // 下载进度 (0-100)
-	Status       string  // 任务状态
-	Message      string  // 状态信息
-	URL          string  // 下载链接
-	Output       string  // 输出路径
-	C            int     // 线程数
-	Created      int64   // 创建时间
-	FileName     string  // 输出文件名
-	DeleteTs     bool    // 合并完成后是否删除分片文件
-	ConvertToMp4 bool    // 是否转换为MP4格式
-	Speed        float64 // 下载速度（字节/秒）
+	ID                   string  // 任务ID
+	Progress             int     // 下载进度 (0-100)
+	Status               string  // 任务状态
+	Message              string  // 状态信息
+	URL                  string  // 下载链接
+	Output               string  // 输出路径
+	C                    int     // 线程数
+	Created              int64   // 创建时间
+	FileName             string  // 输出文件名
+	DeleteTs             bool    // 合并完成后是否删除分片文件
+	ConvertToMp4         bool    // 是否转换为MP4格式
+	Speed                float64 // 下载速度（字节/秒）
+	totalBytesDownloaded int64   // 已下载字节数（用于速度统计）
 
 	stopChan      chan struct{} // 用于停止下载的通道
 	stopped       bool          // 是否已停止
@@ -113,25 +117,30 @@ func NewTask(output string, url string) (*Downloader, error) {
 	taskManager := GetTaskManager()
 	finalFileName := taskManager.GenerateUniqueFileName(folder, fileName)
 
+	// 设置默认线程数，统一来自配置
+	defaultThreadCount := config.Get().DefaultThreadCount
+
 	d := &Downloader{
-		folder:        folder,
-		tsFolder:      tsFolder,
-		result:        result,
-		ID:            id,
-		Progress:      0,
-		Status:        StatusPending,
-		Message:       "等待下载",
-		URL:           url,
-		Output:        output,
-		FileName:      finalFileName,
-		Created:       time.Now().Unix(),
-		stopChan:      make(chan struct{}),
-		stopped:       false,
-		DeleteTs:      false, // 默认不删除分片文件
-		ConvertToMp4:  false, // 默认不转换为MP4
-		Speed:         0,     // 初始下载速度为0
-		lastBytes:     0,
-		lastSpeedTime: time.Now(),
+		folder:               folder,
+		tsFolder:             tsFolder,
+		result:               result,
+		ID:                   id,
+		Progress:             0,
+		Status:               StatusPending,
+		Message:              "等待下载",
+		URL:                  url,
+		Output:               output,
+		FileName:             finalFileName,
+		Created:              time.Now().Unix(),
+		stopChan:             make(chan struct{}),
+		stopped:              false,
+		DeleteTs:             false, // 默认不删除分片文件
+		ConvertToMp4:         false, // 默认不转换为MP4
+		Speed:                0,     // 初始下载速度为0
+		totalBytesDownloaded: 0,
+		lastBytes:            0,
+		lastSpeedTime:        time.Now(),
+		C:                    defaultThreadCount, // 设置默认线程数
 	}
 	d.segLen = len(result.M3u8.Segments)
 	d.queue = genSlice(d.segLen)
@@ -337,57 +346,57 @@ func (d *Downloader) download(segIndex int) error {
 	if err != nil {
 		return fmt.Errorf("create file: %s, %s", tsFilename, err.Error())
 	}
-	bytes, err := ioutil.ReadAll(b)
+	// 将读取与写入改为流式 + 大缓冲区，减少内存与 flush 次数
+	writer := bufio.NewWriterSize(f, 256*1024) // 256KB 缓冲
+
+	rawBytes, err := io.ReadAll(b)
 	if err != nil {
 		return fmt.Errorf("read bytes: %s, %s", tsUrl, err.Error())
 	}
+
 	sf := d.result.M3u8.Segments[segIndex]
 	if sf == nil {
 		return fmt.Errorf("invalid segment index: %d", segIndex)
 	}
+
 	key, ok := d.result.Keys[sf.KeyIndex]
 	if ok && key != "" {
-		bytes, err = tool.AES128Decrypt(bytes, []byte(key),
+		rawBytes, err = tool.AES128Decrypt(rawBytes, []byte(key),
 			[]byte(d.result.M3u8.Keys[sf.KeyIndex].IV))
 		if err != nil {
 			return fmt.Errorf("decryt: %s, %s", tsUrl, err.Error())
 		}
 	}
-	// https://en.wikipedia.org/wiki/MPEG_transport_stream
-	// Some TS files do not start with SyncByte 0x47, they can not be played after merging,
-	// Need to remove the bytes before the SyncByte 0x47(71).
-	syncByte := uint8(71) //0x47
-	bLen := len(bytes)
-	for j := 0; j < bLen; j++ {
-		if bytes[j] == syncByte {
-			bytes = bytes[j:]
-			break
-		}
+
+	// 清理前同步至 TS 包首字节 0x47
+	syncByte := uint8(71)
+	idx := bytes.IndexByte(rawBytes, syncByte)
+	if idx >= 0 {
+		rawBytes = rawBytes[idx:]
 	}
-	w := bufio.NewWriter(f)
-	if _, err := w.Write(bytes); err != nil {
+
+	if _, err := writer.Write(rawBytes); err != nil {
 		return fmt.Errorf("write to %s: %s", fTemp, err.Error())
 	}
-	// Release file resource to rename file
+
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush writer: %s", err.Error())
+	}
+
 	_ = f.Close()
 	if err = os.Rename(fTemp, fPath); err != nil {
 		return err
 	}
 
 	d.lock.Lock()
-	// 更新下载速度计算
-	currentTime := time.Now()
-	// 获取文件大小并累加到已下载字节数
-	fileInfo, err := os.Stat(fPath)
-	if err == nil {
-		// 这里不再需要变量，直接记录日志
-		_ = fileInfo.Size()
-	}
+	// 累计已下载字节数
+	atomic.AddInt64(&d.totalBytesDownloaded, int64(len(rawBytes)))
 
 	// 计算下载速度（每秒更新一次）
+	currentTime := time.Now()
 	timeDiff := currentTime.Sub(d.lastSpeedTime).Seconds()
 	if timeDiff >= 1.0 { // 每秒计算一次速度
-		totalBytes := getTotalDownloadedBytes(d.tsFolder)
+		totalBytes := atomic.LoadInt64(&d.totalBytesDownloaded)
 		bytesDiff := totalBytes - d.lastBytes
 
 		// 计算速度（字节/秒）

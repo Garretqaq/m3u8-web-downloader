@@ -120,6 +120,33 @@
                   </div>
                   <div class="form-extra">同时进行下载的最大任务数量，超出此数量的任务将会排队等待</div>
                 </a-form-item>
+                
+                <a-form-item 
+                  name="downloadSpeedLimit" 
+                  label="下载速度限制 (KB/s)" 
+                  :rules="[{ required: true, type: 'number', min: 0, message: '速度限制需大于等于0' }]"
+                >
+                  <div class="thread-row">
+                    <a-slider
+                      v-model:value="formState.downloadSpeedLimit"
+                      :min="0"
+                      :max="10240"
+                      :marks="{ 0: '', 1024: '1MB/s', 5120: '5MB/s', 10240: '10MB/s' }"
+                      class="thread-slider"
+                      :tip-formatter="value => value === 0 ? '不限制' : `${value} KB/s`"
+                    />
+                    <a-input-number
+                      v-model:value="formState.downloadSpeedLimit"
+                      :min="0"
+                      :max="20480"
+                      style="width: 90px;"
+                      size="middle"
+                      class="thread-input"
+                    />
+                  </div>
+                  <!-- Slider 已直接显示刻度标签，无需额外文字 -->
+                  <div class="form-extra">设置为0表示不限制下载速度，建议根据网络带宽合理设置</div>
+                </a-form-item>
               </div>
             </div>
             
@@ -223,7 +250,8 @@ const formState = reactive({
   defaultThreadCount: 25,
   defaultConvertToMp4: true,
   defaultDeleteTs: true,
-  maxConcurrentDownload: 3
+  maxConcurrentDownload: 3,
+  downloadSpeedLimit: 0
 })
 
 // 从服务器加载配置
@@ -239,6 +267,7 @@ const loadSettings = async () => {
       formState.defaultConvertToMp4 = data.defaultConvertToMp4 !== undefined ? data.defaultConvertToMp4 : true;
       formState.defaultDeleteTs = data.defaultDeleteTs !== undefined ? data.defaultDeleteTs : true;
       formState.maxConcurrentDownload = data.maxConcurrentDownload || 3;
+      formState.downloadSpeedLimit = data.downloadSpeedLimit || 0;
       console.log('设置后的表单状态:', formState)
     } else {
       message.error('加载配置失败: ' + response.data.message)
@@ -261,7 +290,8 @@ const saveSettings = async () => {
       defaultThreadCount: formState.defaultThreadCount,
       defaultConvertToMp4: formState.defaultConvertToMp4,
       defaultDeleteTs: formState.defaultDeleteTs,
-      maxConcurrentDownload: formState.maxConcurrentDownload
+      maxConcurrentDownload: formState.maxConcurrentDownload,
+      downloadSpeedLimit: formState.downloadSpeedLimit
     })
     
     if (response.data.success) {
@@ -533,6 +563,26 @@ onMounted(() => {
 
 .thread-slider {
   flex: 1;
+}
+
+.speed-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 8px;
+  margin-top: -5px;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: #999;
+}
+
+.speed-labels span:first-child {
+  text-align: left;
+  margin-left: 2px;
+}
+
+.speed-labels span:last-child {
+  text-align: right;
+  margin-right: 2px;
 }
 
 .btn-with-effect {

@@ -1,7 +1,8 @@
 {
   "defaultOutputPath": "/data/tmp2",
-  "defaultThreadCount": 25,
+  "defaultThreadCount": 1,
   "defaultConvertToMp4": true,
   "defaultDeleteTs": true,
-  "maxConcurrentDownload": 1
+  "maxConcurrentDownload": 1,
+  "downloadSpeedLimit": 0
 }

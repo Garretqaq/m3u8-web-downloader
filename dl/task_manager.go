@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"m3u8-go/config"
 )
 
 // TaskManager 管理所有下载任务
@@ -20,6 +22,7 @@ type TaskManager struct {
 	downloadQueue     []*Downloader          // 等待下载的任务队列
 	queueLock         sync.Mutex             // 队列锁
 	downloadQueueTick *time.Ticker           // 下载队列定时器
+	speedLimit        int                    // 下载速度限制，单位KB/s，0表示不限制
 }
 
 // 单例模式
@@ -34,10 +37,26 @@ func GetTaskManager() *TaskManager {
 		instance = &TaskManager{
 			tasks:          make(map[string]*Downloader),
 			fileNameMap:    make(map[string]bool),
-			maxConcurrent:  3, // 默认同时下载数量为3
 			downloadingSem: make(chan struct{}, 3),
 			downloadQueue:  make([]*Downloader, 0),
+			speedLimit:     0, // 默认不限制下载速度
 		}
+
+		// 根据配置初始化最大并发下载数量
+		cfg := config.Get()
+		max := cfg.MaxConcurrentDownload
+		if max <= 0 {
+			max = 3
+		} else if max > 10 {
+			max = 10
+		}
+
+		instance.maxConcurrent = max
+		instance.downloadingSem = make(chan struct{}, max)
+
+		instance.downloadQueue = make([]*Downloader, 0)
+		instance.speedLimit = 0 // 初始不限速
+
 		// 启动队列处理器
 		go instance.startQueueProcessor()
 		fmt.Printf("[任务管理器] 初始化完成，默认同时下载数量: %d\n", instance.maxConcurrent)
@@ -64,6 +83,27 @@ func (tm *TaskManager) UpdateMaxConcurrentDownloads(max int) {
 		// 重新处理队列中的任务
 		go tm.checkQueuedTasks()
 	}
+}
+
+// UpdateDownloadSpeedLimit 更新下载速度限制
+func (tm *TaskManager) UpdateDownloadSpeedLimit(limit int) {
+	tm.lock.Lock()
+	defer tm.lock.Unlock()
+
+	// 如果速度限制小于0，则设置为0（不限制）
+	if limit < 0 {
+		limit = 0
+	}
+
+	fmt.Printf("[任务管理器] 更新下载速度限制为 %d KB/s\n", limit)
+	tm.speedLimit = limit
+}
+
+// GetDownloadSpeedLimit 获取当前下载速度限制
+func (tm *TaskManager) GetDownloadSpeedLimit() int {
+	tm.lock.RLock()
+	defer tm.lock.RUnlock()
+	return tm.speedLimit
 }
 
 // GetMaxConcurrentDownloads 获取当前最大并发下载数量
@@ -160,6 +200,12 @@ func (tm *TaskManager) checkQueuedTasks() {
 					// 下载完成后检查队列，可能有等待的任务
 					tm.checkQueuedTasks()
 				}()
+
+				// 确保线程数至少为1
+				if t.C <= 0 {
+					t.C = config.Get().DefaultThreadCount // 使用默认值
+				}
+				fmt.Printf("[队列处理] 任务 %s 开始下载，线程数: %d\n", t.ID, t.C)
 
 				if err := t.Start(t.C); err != nil {
 					t.Status = StatusFailed

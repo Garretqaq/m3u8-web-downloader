@@ -120,6 +120,7 @@
                     <span class="speed-icon"><ThunderboltOutlined /></span>
                     <span class="speed-text">{{ formatSpeed(task.speed) }}</span>
                     <a-tag color="#1890ff" class="speed-tag">速度</a-tag>
+                    <a-tag v-if="speedLimit > 0" color="orange" class="limit-tag">限速 {{ formatLimit(speedLimit) }}</a-tag>
                   </div>
                   
                   <a-progress 
@@ -395,6 +396,17 @@ let refreshInterval = null
 const urlInputRef = ref(null)
 const outputInputRef = ref(null)
 
+// 全局限速值
+const speedLimit = ref(0)
+
+// 格式化限速
+const formatLimit = (limit) => {
+  if (limit >= 1024) {
+    return `${(limit / 1024).toFixed(limit % 1024 === 0 ? 0 : 1)}MB/s`
+  }
+  return `${limit}KB/s`
+}
+
 // 表单状态
 const formState = reactive({
   url: '',
@@ -440,6 +452,13 @@ onMounted(() => {
   refreshInterval = setInterval(() => {
     store.fetchTasks()
   }, 1000)
+
+  // 加载全局设置，获取限速
+  axios.get('/api/settings').then(res => {
+    if (res.data.success) {
+      speedLimit.value = res.data.data?.downloadSpeedLimit || 0
+    }
+  }).catch(() => {})
 })
 
 // 组件卸载时清除定时器
@@ -1351,7 +1370,7 @@ a-progress :deep(.ant-progress-outer) {
   height: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  margin-left: auto;
+  margin-left: 4px;
 }
 
 @keyframes flash {
@@ -1369,5 +1388,14 @@ a-progress :deep(.ant-progress-outer) {
 
 .resume-button {
   background-color: #52c41a;
+}
+
+.limit-tag {
+  font-size: 12px;
+  line-height: 14px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  margin-left: 4px;
 }
 </style> 

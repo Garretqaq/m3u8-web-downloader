@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"m3u8-go/config"
 	"m3u8-go/dl"
 	"m3u8-go/tool"
 
@@ -45,24 +45,20 @@ type TaskInfo struct {
 	Speed    float64 `json:"speed"`    // 下载速度（字节/秒）
 }
 
-// 新增配置结构体
-type Settings struct {
-	DefaultOutputPath     string `json:"defaultOutputPath"`
-	DefaultThreadCount    int    `json:"defaultThreadCount"`
-	DefaultConvertToMp4   bool   `json:"defaultConvertToMp4"`
-	DefaultDeleteTs       bool   `json:"defaultDeleteTs"`
-	MaxConcurrentDownload int    `json:"maxConcurrentDownload"`
-}
-
 func main() {
 	// 注册退出信号处理，确保清理临时文件
 	setupCleanupHandler()
 
-	// 加载配置初始化任务管理器
-	settings, _ := loadSettings()
+	// 加载配置并初始化任务管理器
+	settings, _ := config.Load()
 	taskManager := dl.GetTaskManager()
 	if settings.MaxConcurrentDownload > 0 && settings.MaxConcurrentDownload <= 10 {
 		taskManager.UpdateMaxConcurrentDownloads(settings.MaxConcurrentDownload)
+	}
+
+	// 设置下载速度限制
+	if settings.DownloadSpeedLimit >= 0 {
+		taskManager.UpdateDownloadSpeedLimit(settings.DownloadSpeedLimit)
 	}
 
 	// 使用 gin.New() 替代 gin.Default() 以关闭默认日志
@@ -81,7 +77,7 @@ func main() {
 				return
 			}
 			if req.C <= 0 {
-				req.C = 25
+				req.C = config.Get().DefaultThreadCount
 			}
 
 			downloader, err := dl.NewTask(req.Output, req.Url)
@@ -89,6 +85,9 @@ func main() {
 				c.JSON(http.StatusInternalServerError, DownloadResponse{false, "创建下载任务失败: " + err.Error(), nil})
 				return
 			}
+
+			// 设置用户指定的线程数
+			downloader.C = req.C
 
 			// 设置自定义文件名（如果有）
 			if req.CustomFileName != "" {
@@ -260,15 +259,7 @@ func main() {
 
 		// 获取设置
 		api.GET("/settings", func(c *gin.Context) {
-			settings, err := loadSettings()
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, DownloadResponse{
-					Success: false,
-					Message: "加载配置失败: " + err.Error(),
-				})
-				return
-			}
-
+			settings := config.Get()
 			c.JSON(http.StatusOK, DownloadResponse{
 				Success: true,
 				Message: "获取配置成功",
@@ -278,7 +269,7 @@ func main() {
 
 		// 保存设置
 		api.POST("/settings", func(c *gin.Context) {
-			var settings Settings
+			var settings config.Settings
 			if err := c.ShouldBindJSON(&settings); err != nil {
 				c.JSON(http.StatusBadRequest, DownloadResponse{
 					Success: false,
@@ -297,7 +288,7 @@ func main() {
 			}
 
 			if settings.DefaultThreadCount <= 0 || settings.DefaultThreadCount > 128 {
-				settings.DefaultThreadCount = 25 // 使用默认值
+				settings.DefaultThreadCount = config.Get().DefaultThreadCount // 使用默认值
 			}
 
 			// 尝试创建目录，检查是否有权限
@@ -311,15 +302,21 @@ func main() {
 
 			// 验证同时下载数量
 			if settings.MaxConcurrentDownload <= 0 || settings.MaxConcurrentDownload > 10 {
-				settings.MaxConcurrentDownload = 3 // 设置默认值
+				settings.MaxConcurrentDownload = config.Get().MaxConcurrentDownload // 设置默认值
 			}
 
-			// 更新任务管理器的最大并发下载数
+			// 验证下载速度限制
+			if settings.DownloadSpeedLimit < 0 {
+				settings.DownloadSpeedLimit = 0 // 负数设为0，表示不限速
+			}
+
+			// 更新任务管理器的最大并发下载数和速度限制
 			taskManager := dl.GetTaskManager()
 			taskManager.UpdateMaxConcurrentDownloads(settings.MaxConcurrentDownload)
+			taskManager.UpdateDownloadSpeedLimit(settings.DownloadSpeedLimit)
 
 			// 保存设置
-			if err := saveSettings(settings); err != nil {
+			if err := config.Save(settings); err != nil {
 				c.JSON(http.StatusInternalServerError, DownloadResponse{
 					Success: false,
 					Message: "保存配置失败: " + err.Error(),
@@ -373,53 +370,4 @@ func setupCleanupHandler() {
 		tool.Cleanup()
 		os.Exit(0)
 	}()
-}
-
-// loadSettings 从文件中加载设置
-func loadSettings() (Settings, error) {
-	settingsPath := "./settings.json"
-	settings := Settings{
-		DefaultOutputPath:     "./downloads", // 默认值
-		DefaultThreadCount:    25,            // 默认值
-		DefaultConvertToMp4:   true,          // 默认值
-		DefaultDeleteTs:       true,          // 默认值
-		MaxConcurrentDownload: 3,             // 默认同时下载数量
-	}
-
-	// 检查设置文件是否存在
-	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
-		// 文件不存在，创建默认设置
-		return settings, saveSettings(settings)
-	}
-
-	// 读取设置文件
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return settings, fmt.Errorf("读取配置文件失败: %w", err)
-	}
-
-	// 解析 JSON
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return settings, fmt.Errorf("解析配置文件失败: %w", err)
-	}
-
-	return settings, nil
-}
-
-// saveSettings 保存设置到文件
-func saveSettings(settings Settings) error {
-	settingsPath := "./settings.json"
-
-	// 编码为 JSON
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("编码配置失败: %w", err)
-	}
-
-	// 写入文件
-	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
-		return fmt.Errorf("写入配置文件失败: %w", err)
-	}
-
-	return nil
 }
