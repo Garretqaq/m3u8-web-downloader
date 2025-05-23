@@ -339,6 +339,12 @@ downloadLoop:
 		return fmt.Errorf("too few segments downloaded (%d of %d)", finishedCount, d.segLen)
 	}
 
+	// 重要修改：在合并前释放下载槽位
+	// 通知任务管理器释放当前任务的下载槽位，这样合并过程不会占用下载限制
+	taskManager = GetTaskManager()
+	taskManager.ReleaseDownloadSlot(d.ID)
+	tool.Info("[task %s] 下载阶段完成，释放下载槽位准备进行合并", d.ID)
+
 	// 尝试合并，如果合并失败则设置相应状态
 	if err := d.merge(); err != nil {
 		d.Status = StatusFailed

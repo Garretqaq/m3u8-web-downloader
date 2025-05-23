@@ -296,14 +296,8 @@ func (tm *TaskManager) checkQueuedTasks() {
 
 			// 异步开始下载
 			go func(t *Downloader) {
-				defer func() {
-					// 下载完成后释放槽位
-					<-tm.downloadingSem
-					tool.Info("[队列处理] 任务 %s 完成，已释放下载槽位", t.ID)
-
-					// 下载完成后检查队列，可能有等待的任务
-					tm.checkQueuedTasks()
-				}()
+				// 注意：合并阶段会通过ReleaseDownloadSlot方法释放槽位
+				// 这里不再使用defer释放槽位，而是根据任务完成情况处理
 
 				// 确保线程数至少为1
 				if t.C <= 0 {
@@ -311,11 +305,24 @@ func (tm *TaskManager) checkQueuedTasks() {
 				}
 				tool.Info("[队列处理] 任务 %s 开始下载，线程数: %d", t.ID, t.C)
 
-				if err := t.Start(t.C); err != nil {
+				// 开始下载过程
+				err := t.Start(t.C)
+
+				// 检查下载结果
+				if err != nil {
+					// 下载失败时，设置失败状态并释放槽位
 					t.Status = StatusFailed
 					t.Message = "下载失败: " + err.Error()
 					tool.Error("[队列处理] 任务 %s 下载失败: %s", t.ID, err)
+
+					// 释放槽位
+					<-tm.downloadingSem
+					tool.Info("[队列处理] 任务 %s 下载失败，释放槽位", t.ID)
 				}
+
+				// 对于成功的任务，ReleaseDownloadSlot已在合并前释放了槽位
+				// 下载完成后检查队列，可能有等待的任务
+				tm.checkQueuedTasks()
 			}(task)
 		default:
 			// 没有可用槽位，保留在队列中
@@ -354,19 +361,23 @@ func (tm *TaskManager) EnqueueDownload(task *Downloader) {
 
 		// 异步开始下载
 		go func(t *Downloader) {
-			defer func() {
-				// 下载完成后释放槽位
-				<-tm.downloadingSem
-				tool.Info("[队列] 任务 %s 完成，释放槽位，当前可用槽位: %d",
-					t.ID, cap(tm.downloadingSem)-len(tm.downloadingSem)+1)
-				// 下载完成后检查队列，可能有等待的任务
-				tm.checkQueuedTasks()
-			}()
+			// 注意：合并阶段会通过ReleaseDownloadSlot方法释放槽位
+			// 这里不再直接释放槽位，而是根据任务完成情况处理
 
-			if err := t.Start(t.C); err != nil {
-				t.Status = StatusFailed
-				t.Message = "下载失败: " + err.Error()
+			// 开始下载过程
+			err := t.Start(t.C)
+
+			// 检查下载结果
+			if err != nil {
+				// 下载失败，释放槽位
+				<-tm.downloadingSem
+				tool.Info("[队列] 任务 %s 下载失败，释放槽位，当前可用槽位: %d",
+					t.ID, cap(tm.downloadingSem)-len(tm.downloadingSem)+1)
 			}
+
+			// 对于成功完成的任务，ReleaseDownloadSlot方法已经在合并前释放了槽位
+			// 下载任务结束后检查队列，可能有等待的任务
+			tm.checkQueuedTasks()
 		}(task)
 	default:
 		// 没有可用槽位，加入等待队列
@@ -431,6 +442,7 @@ func (tm *TaskManager) StopAndDeleteTask(id string) (bool, error) {
 
 	// 检查任务是否占用下载槽位
 	// 不仅是当前正在下载的，还有刚刚从队列中被取出准备开始下载的任务
+	// 注意：StatusConverting状态的任务已经释放了槽位，不需要再次释放
 	isOccupyingSlot := task.Status == StatusDownloading || task.Status == StatusPending
 
 	// 先解锁，因为 Stop 方法内部会获取锁
@@ -452,7 +464,6 @@ func (tm *TaskManager) StopAndDeleteTask(id string) (bool, error) {
 	tool.Info("[管理器] 任务 %s 已从管理器中删除", id)
 
 	// 4. 如果删除的是占用下载槽位的任务，释放下载槽位并检查队列
-	// 但要注意，我们不确定这个任务是否真的占用了下载槽位，因为它可能仅仅是在队列中
 	if isOccupyingSlot {
 		tool.Debug("[管理器] 任务 %s 可能占用下载槽位，尝试释放", id)
 
@@ -486,6 +497,7 @@ func (tm *TaskManager) DeleteTask(id string) bool {
 
 	if task, exists := tm.tasks[id]; exists {
 		// 检查任务是否占用下载槽位
+		// 注意：StatusConverting状态的任务已经释放了槽位，不需要再次释放
 		isOccupyingSlot := task.Status == StatusDownloading || task.Status == StatusPending
 
 		// 取消文件名占用
@@ -621,4 +633,41 @@ func (tm *TaskManager) ClearCompletedTasks() int {
 	}
 
 	return count
+}
+
+// ReleaseDownloadSlot 释放指定任务的下载槽位
+// 在任务从下载阶段进入合并阶段时调用，确保合并过程不会占用下载限制
+func (tm *TaskManager) ReleaseDownloadSlot(taskID string) bool {
+	tm.lock.Lock()
+	defer tm.lock.Unlock()
+
+	task, exists := tm.tasks[taskID]
+	if !exists {
+		tool.Warning("[任务管理器] 尝试释放不存在的任务 %s 的下载槽位", taskID)
+		return false
+	}
+
+	// 检查任务是否处于下载中状态，只有下载中的任务才可能占用下载槽位
+	if task.Status != StatusDownloading {
+		tool.Warning("[任务管理器] 任务 %s 状态为 %s，可能未占用下载槽位", taskID, task.Status)
+		return false
+	}
+
+	// 尝试释放一个下载槽位
+	select {
+	case <-tm.downloadingSem:
+		tool.Info("[任务管理器] 成功释放任务 %s 的下载槽位，当前可用槽位: %d/%d",
+			taskID, cap(tm.downloadingSem)-len(tm.downloadingSem)+1, cap(tm.downloadingSem))
+
+		// 任务状态更新为合并中，但继续保留在任务列表中
+		task.Status = StatusConverting
+		task.Message = "正在合并文件..."
+
+		// 检查队列，可能有等待的任务可以开始下载
+		go tm.checkQueuedTasks()
+		return true
+	default:
+		tool.Warning("[任务管理器] 无法释放任务 %s 的下载槽位，可能槽位已空", taskID)
+		return false
+	}
 }

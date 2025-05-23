@@ -357,7 +357,7 @@ func main() {
 			return
 		}
 		// 否则返回index.html（支持SPA前端路由）
-		c.File("./static/index.html")
+		c.File("./web/dist/index.html")
 	})
 
 	r.Run(":9100")
