@@ -25,14 +25,15 @@ type Response struct {
 
 // TaskInfo 用于API返回的任务信息
 type TaskInfo struct {
-	ID       string  `json:"id"`       // 任务ID
-	URL      string  `json:"url"`      // 下载链接
-	Output   string  `json:"output"`   // 输出路径
-	C        int     `json:"c"`        // 线程数
-	Progress int     `json:"progress"` // 下载进度 (0-100)
-	Status   string  `json:"status"`   // 任务状态
-	Message  string  `json:"message"`  // 状态信息
-	Created  int64   `json:"created"`  // 创建时间
-	FileName string  `json:"fileName"` // 输出文件名
-	Speed    float64 `json:"speed"`    // 下载速度（字节/秒）
+	ID        string  `json:"id"`        // 任务ID
+	URL       string  `json:"url"`       // 下载链接
+	Output    string  `json:"output"`    // 输出路径
+	C         int     `json:"c"`         // 线程数
+	Progress  int     `json:"progress"`  // 下载进度 (0-100)
+	Status    string  `json:"status"`    // 任务状态
+	Message   string  `json:"message"`   // 状态信息
+	Created   int64   `json:"created"`   // 创建时间
+	FileName  string  `json:"fileName"`  // 输出文件名
+	Speed     float64 `json:"speed"`     // 下载速度（字节/秒）
+	TotalSize int64   `json:"totalSize"` // 文件总大小（字节）
 }

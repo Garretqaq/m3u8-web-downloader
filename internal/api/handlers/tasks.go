@@ -17,16 +17,17 @@ func GetAllTasks(c *gin.Context) {
 	taskInfos := make([]TaskInfo, 0, len(tasks))
 	for _, task := range tasks {
 		taskInfos = append(taskInfos, TaskInfo{
-			ID:       task.ID,
-			URL:      task.URL,
-			Output:   task.Output,
-			C:        task.C,
-			Progress: task.Progress,
-			Status:   task.Status,
-			Message:  task.Message,
-			Created:  task.Created,
-			FileName: task.FileName,
-			Speed:    task.Speed,
+			ID:        task.ID,
+			URL:       task.URL,
+			Output:    task.Output,
+			C:         task.C,
+			Progress:  task.Progress,
+			Status:    task.Status,
+			Message:   task.Message,
+			Created:   task.Created,
+			FileName:  task.FileName,
+			Speed:     task.Speed,
+			TotalSize: task.TotalSize,
 		})
 	}
 
@@ -45,16 +46,17 @@ func GetTaskByID(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, Response{true, "获取任务成功", TaskInfo{
-		ID:       task.ID,
-		URL:      task.URL,
-		Output:   task.Output,
-		C:        task.C,
-		Progress: task.Progress,
-		Status:   task.Status,
-		Message:  task.Message,
-		Created:  task.Created,
-		FileName: task.FileName,
-		Speed:    task.Speed,
+		ID:        task.ID,
+		URL:       task.URL,
+		Output:    task.Output,
+		C:         task.C,
+		Progress:  task.Progress,
+		Status:    task.Status,
+		Message:   task.Message,
+		Created:   task.Created,
+		FileName:  task.FileName,
+		Speed:     task.Speed,
+		TotalSize: task.TotalSize,
 	}})
 }
 

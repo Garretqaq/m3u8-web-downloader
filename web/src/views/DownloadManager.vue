@@ -61,7 +61,7 @@
                         <LoadingOutlined v-if="task.status === 'downloading' || task.status === 'converting'" spin />
                         <CheckCircleOutlined v-else-if="task.status === 'success'" />
                         <CloseCircleOutlined v-else-if="task.status === 'failed'" />
-                        <ClockCircleOutlined v-else />
+                        <HourglassOutlined v-else />
                       </span>
                       {{ statusTexts[task.status] || task.status }}
                     </a-tag>
@@ -122,6 +122,17 @@
                     <span class="speed-icon"><ThunderboltOutlined /></span>
                     <span class="speed-text">{{ formatSpeed(task.speed) }}</span>
                     <a-tag color="#1890ff" class="speed-tag">速度</a-tag>
+                  </div>
+                  
+                  <!-- 文件大小显示，无论任务状态如何都显示 -->
+                  <div v-if="task.totalSize" class="download-size" :class="{
+                    'size-success': task.status === 'success',
+                    'size-downloading': task.status === 'downloading',
+                    'size-failed': task.status === 'failed'
+                  }">
+                    <span class="size-icon"><DatabaseOutlined /></span>
+                    <span class="size-text">{{ formatFileSize(task.totalSize) }}</span>
+                    <a-tag :color="getSizeTagColor(task.status)" class="size-tag">大小</a-tag>
                   </div>
                   
                   <a-progress 
@@ -494,11 +505,12 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  ClockCircleOutlined,
   SettingOutlined,
   UpOutlined,
   ThunderboltOutlined,
-  HomeOutlined
+  HomeOutlined,
+  DatabaseOutlined,
+  HourglassOutlined
 } from '@ant-design/icons-vue'
 import axios from 'axios'
 
@@ -1120,6 +1132,39 @@ const fetchGlobalSettings = () => {
       speedLimit.value = res.data.data?.downloadSpeedLimit || 0
     }
   }).catch(() => {})
+}
+
+// 格式化文件大小
+const formatFileSize = (size) => {
+  if (!size || size === 0) return '未知';
+  
+  // 假设size是以字节为单位
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let sizeValue = size;
+  let unitIndex = 0;
+  
+  // 逐级转换到合适的单位
+  while (sizeValue >= 1024 && unitIndex < units.length - 1) {
+    sizeValue /= 1024;
+    unitIndex++;
+  }
+  
+  // 根据大小决定小数位数
+  let decimals = 2;
+  if (unitIndex === 0) decimals = 0; // 字节不需要小数
+  if (unitIndex === 1) decimals = 1; // KB保留1位小数
+  
+  return `${sizeValue.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+// 获取文件大小标签颜色
+const getSizeTagColor = (status) => {
+  switch (status) {
+    case 'success': return '#52c41a'
+    case 'failed': return '#f5222d'
+    case 'downloading': return '#722ed1'
+    default: return '#faad14'
+  }
 }
 </script>
 
@@ -2071,7 +2116,6 @@ a-progress :deep(.ant-progress-outer) {
   height: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  margin-left: 4px;
 }
 
 @keyframes flash {
@@ -2110,5 +2154,56 @@ a-progress :deep(.ant-progress-outer) {
 
 .global-limit-tag :deep(.anticon) {
   font-size: 14px;
+}
+
+.download-size {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.size-icon {
+  margin-right: 6px;
+}
+
+.size-downloading {
+  color: #722ed1;
+}
+
+.size-downloading .size-icon {
+  color: #722ed1;
+  animation: pulse 2s infinite;
+}
+
+.size-success {
+  color: #52c41a;
+}
+
+.size-success .size-icon {
+  color: #52c41a;
+}
+
+.size-failed {
+  color: #f5222d;
+}
+
+.size-failed .size-icon {
+  color: #f5222d;
+}
+
+.size-text {
+  font-family: 'Courier New', monospace;
+  margin-right: 8px;
+}
+
+.size-tag {
+  font-size: 12px;
+  line-height: 14px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  margin-left: 4px;
 }
 </style> 

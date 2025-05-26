@@ -59,6 +59,7 @@ type Downloader struct {
 	ConvertToMp4         bool    // 是否转换为MP4格式
 	Speed                float64 // 下载速度（字节/秒）
 	totalBytesDownloaded int64   // 已下载字节数（用于速度统计）
+	TotalSize            int64   // 文件总大小（字节）
 
 	stopChan      chan struct{} // 用于停止下载的通道
 	stopped       bool          // 是否已停止
@@ -145,6 +146,7 @@ func NewTask(output string, url string) (*Downloader, error) {
 		lastSpeedTime:        time.Now(),
 		C:                    defaultThreadCount, // 设置默认线程数
 		retryCounter:         make(map[int]int),  // 初始化重试计数器
+		TotalSize:            0,                  // 初始化文件总大小
 	}
 	d.segLen = len(result.M3u8.Segments)
 	d.queue = genSlice(d.segLen)
@@ -360,6 +362,15 @@ downloadLoop:
 	d.Progress = 100
 	d.stopped = false // 重置停止标志，确保不会被误标记为已停止
 	d.lock.Unlock()
+
+	// 获取合并后文件的实际大小并更新TotalSize字段
+	filePath := filepath.Join(d.folder, d.FileName)
+	if fileInfo, err := os.Stat(filePath); err == nil {
+		d.TotalSize = fileInfo.Size()
+		tool.Info("[info] 更新文件大小: %s (%d 字节)", d.FileName, d.TotalSize)
+	} else {
+		tool.Warning("[warning] 无法获取文件大小: %s, 错误: %s", filePath, err.Error())
+	}
 
 	// 添加状态转换日志，便于调试
 	tool.Info("[任务 %s] 状态已从 %s 更新为 %s", d.ID, prevStatus, StatusSuccess)
@@ -614,6 +625,11 @@ func (d *Downloader) download(segIndex int) error {
 	d.Progress = progress
 	d.Message = fmt.Sprintf("已下载 %d%%", progress)
 
+	// 计算文件大小并更新总大小
+	d.lock.Lock()
+	d.TotalSize += int64(len(rawBytes))
+	d.lock.Unlock()
+
 	return nil
 }
 
@@ -866,6 +882,15 @@ func (d *Downloader) merge() error {
 	d.Status = StatusSuccess // 确保设置状态为成功
 	d.stopped = false        // 重置停止标志，确保不会被误标记为已停止
 	d.Progress = 100
+
+	// 获取合并后文件的实际大小并更新TotalSize字段
+	if fileInfo, err := os.Stat(outputPath); err == nil {
+		d.TotalSize = fileInfo.Size()
+		tool.Info("[info] 更新文件大小: %s (%d 字节)", d.FileName, d.TotalSize)
+	} else {
+		tool.Warning("[warning] 无法获取文件大小: %s, 错误: %s", outputPath, err.Error())
+	}
+
 	d.lock.Unlock()
 
 	// 添加状态转换日志，便于调试
