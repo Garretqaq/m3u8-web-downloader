@@ -38,7 +38,7 @@ var (
 
 // defaultSettings 定义应用的硬编码默认值，仅此处出现一次
 var defaultSettings = Settings{
-	DefaultOutputPath:     "./downloads",
+	DefaultOutputPath:     "/app/downloads",
 	DefaultThreadCount:    25,
 	DefaultConvertToMp4:   true,
 	DefaultDeleteTs:       true,
