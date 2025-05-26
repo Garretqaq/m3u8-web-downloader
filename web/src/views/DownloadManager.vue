@@ -350,50 +350,72 @@
     >
       <div class="folder-tree-container">
         <div class="current-path">
-          <span class="path-label">当前选择：</span>
+          <span class="path-label">当前位置：</span>
           <a-tag color="blue" class="selected-path">
             <FolderOutlined />
             {{ selectedPath || '未选择' }}
           </a-tag>
+          <a-button 
+            v-if="folderBreadcrumbs.length > 1" 
+            type="link" 
+            size="small" 
+            @click="goToParentFolder" 
+            class="parent-folder-btn"
+          >
+            <UpOutlined /> 返回上级
+          </a-button>
         </div>
         
         <a-spin :spinning="folderTreeLoading" tip="加载文件夹...">
-          <div class="tree-container">
-            <a-tree
-              v-if="folderTreeData.length > 0"
-              :tree-data="folderTreeData"
-              :field-names="{ children: 'children', title: 'title', key: 'key' }"
-              :selectable="true"
-              :show-line="true"
-              :show-icon="true"
-              :load-data="loadChildNodes"
-              :default-expanded-keys="[rootPath]"
-              :selected-keys="selectedPath ? [selectedPath] : []"
-              @select="onFolderSelect"
-              class="folder-tree"
+          <div class="folder-list-container">
+            <a-empty 
+              v-if="folderList.length === 0 && !folderTreeLoading" 
+              description="暂无可选择的文件夹" 
+              class="empty-folders"
             >
-              <template #icon="{ dataRef }">
-                <FolderOutlined v-if="!dataRef.isLeaf" />
-                <FileOutlined v-else />
+              <template #image>
+                <FolderOutlined class="empty-icon" />
               </template>
-            </a-tree>
-            
-            <div v-else-if="!folderTreeLoading" class="empty-tree">
-              <FolderOutlined class="empty-icon" />
-              <div class="empty-text">暂无可选择的文件夹</div>
-              <div style="font-size: 12px; color: #999; margin-top: 10px;">
+              <div class="root-path-info">
                 根路径: {{ rootPath || '未设置' }}
+              </div>
+            </a-empty>
+            
+            <div v-else class="folder-grid">
+              <div 
+                v-for="folder in folderList" 
+                :key="folder.path" 
+                class="folder-item"
+                :class="{ 'folder-selected': selectedPath === folder.path }"
+                @click="selectFolderItem(folder.path)"
+                @dblclick="navigateToFolder(folder.path)"
+              >
+                <div class="folder-icon-wrapper">
+                  <FolderOutlined class="folder-icon" />
+                </div>
+                <div class="folder-name" :title="folder.name">{{ folder.name }}</div>
               </div>
             </div>
           </div>
         </a-spin>
         
+        <div class="breadcrumb-container" v-if="folderBreadcrumbs.length > 0">
+          <a-breadcrumb>
+            <a-breadcrumb-item v-for="(crumb, index) in folderBreadcrumbs" :key="index">
+              <a @click="navigateToBreadcrumb(crumb.path)" :class="{'active-crumb': crumb.path === selectedPath}">
+                <span v-if="index === 0"><HomeOutlined /></span>
+                <span v-else>{{ crumb.name }}</span>
+              </a>
+            </a-breadcrumb-item>
+          </a-breadcrumb>
+        </div>
+        
         <div class="tree-actions">
-          <a-button @click="refreshFolderTree" :loading="folderTreeLoading" size="small">
+          <a-button @click="refreshFolderList" :loading="folderTreeLoading" size="small">
             <template #icon><ReloadOutlined /></template>
             刷新
           </a-button>
-          <a-button @click="createNewFolder" type="primary" size="small" style="margin-left: 8px">
+          <a-button @click="createNewFolder" type="primary" size="small">
             <template #icon><PlusOutlined /></template>
             新建文件夹
           </a-button>
@@ -475,7 +497,8 @@ import {
   ClockCircleOutlined,
   SettingOutlined,
   UpOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  HomeOutlined
 } from '@ant-design/icons-vue'
 import axios from 'axios'
 
@@ -493,9 +516,11 @@ const outputInputRef = ref(null)
 const folderTreeVisible = ref(false)
 const folderTreeLoading = ref(false)
 const folderTreeData = ref([])
+const folderList = ref([]) // 当前目录下的文件夹列表
 const selectedPath = ref('')
 const rootPath = ref('')
 const initialPath = ref('') // 记住刚打开窗口时的路径
+const folderBreadcrumbs = ref([]) // 文件夹面包屑导航
 
 // 新建文件夹相关状态
 const createFolderVisible = ref(false)
@@ -573,7 +598,7 @@ onBeforeUnmount(() => {
   clearInterval(refreshInterval)
 })
 
-// 获取文件树数据
+// 获取文件树数据，修改为平铺展示
 const fetchFolderTree = async (path = '') => {
   try {
     folderTreeLoading.value = true
@@ -584,41 +609,37 @@ const fetchFolderTree = async (path = '') => {
     
     if (response.data.success) {
       const data = response.data.data
-      rootPath.value = data.rootPath || ''
       
-      // 转换为antd tree需要的格式
-      const convertToTreeData = (folders, depth = 0) => {
+      // 只在第一次加载时设置rootPath，避免后续导航时覆盖根路径
+      if (!rootPath.value) {
+        rootPath.value = data.rootPath || ''
+      }
+      
+      // 提取当前目录下的文件夹
+      const extractFolders = (folders) => {
         if (!folders || !Array.isArray(folders)) {
           return []
         }
-        return folders.map(folder => {
-          const hasChildren = folder.children && folder.children.length > 0
-          return {
-            title: folder.name,
-            key: folder.path,
-            isLeaf: !hasChildren, // 如果有子文件夹，则不是叶子节点
-            children: hasChildren ? convertToTreeData(folder.children, depth + 1) : undefined
-          }
-        })
+        return folders.map(folder => ({
+          name: folder.name,
+          path: folder.path,
+          hasChildren: folder.children && folder.children.length > 0
+        }))
       }
       
-      const treeData = convertToTreeData(data.folders || [])
-      
-      // 无论是否有path参数，都更新folderTreeData
-      folderTreeData.value = treeData
+      // 更新当前目录下的文件夹列表
+      folderList.value = extractFolders(data.folders || [])
       
       // 如果selectedPath还没有设置，或者表单的output为空，则使用返回的rootPath
       if (!selectedPath.value || !formState.output) {
         selectedPath.value = rootPath.value
       }
       
-      // 如果传入了path参数，说明是懒加载子节点，返回转换后的数据
-      if (path) {
-        return treeData
-      }
+      // 更新面包屑导航
+      updateBreadcrumbs(selectedPath.value)
     } else {
       message.error(response.data.message || '获取文件夹列表失败')
-      folderTreeData.value = []
+      folderList.value = []
     }
   } catch (error) {
     // 处理API返回的错误信息
@@ -627,75 +648,119 @@ const fetchFolderTree = async (path = '') => {
     } else {
       message.error('获取文件夹列表失败');
     }
-    folderTreeData.value = []
+    folderList.value = []
   } finally {
     folderTreeLoading.value = false
   }
 }
 
-// 加载子节点（懒加载）
-const loadChildNodes = async (treeNode) => {
-  try {
-    folderTreeLoading.value = true
+// 选择文件夹项
+const selectFolderItem = (path) => {
+  selectedPath.value = path
+}
+
+// 双击导航到文件夹
+const navigateToFolder = async (path) => {
+  selectedPath.value = path
+  await fetchFolderTree(path)
+}
+
+// 点击面包屑导航
+const navigateToBreadcrumb = async (path) => {
+  selectedPath.value = path
+  await fetchFolderTree(path)
+}
+
+// 更新面包屑导航
+const updateBreadcrumbs = (path) => {
+  if (!path) {
+    folderBreadcrumbs.value = []
+    return
+  }
+  
+  // 分割路径
+  const parts = path.split('/')
+  let currentPath = ''
+  
+  // 创建面包屑数组
+  folderBreadcrumbs.value = parts.map((part, index) => {
+    if (index === 0 && part === '') {
+      // 根目录
+      currentPath = '/'
+      return { name: '根目录', path: '/' }
+    }
     
-    const response = await axios.get('/api/folders', {
-      params: { path: treeNode.dataRef.key }
-    })
+    if (part === '') return null
     
-    if (response.data.success) {
-      const data = response.data.data
+    currentPath = currentPath === '/' 
+      ? `/${part}` 
+      : `${currentPath}/${part}`
       
-      // 转换子节点数据
-      const convertToTreeData = (folders) => {
-        if (!folders || !Array.isArray(folders)) {
-          return []
-        }
-        return folders.map(folder => ({
-          title: folder.name,
-          key: folder.path,
-          isLeaf: false,
-          children: folder.children ? convertToTreeData(folder.children) : undefined
-        }))
+    return { name: part, path: currentPath }
+  }).filter(Boolean) // 过滤掉null值
+  
+  // 如果是Windows路径（如C:\），特殊处理
+  if (/^[A-Z]:\\/.test(path)) {
+    const drive = path.substring(0, 2)
+    folderBreadcrumbs.value = [
+      { name: drive, path: drive + '\\' }
+    ]
+    
+    const winParts = path.substring(3).split('\\')
+    let winPath = drive + '\\'
+    
+    winParts.forEach(part => {
+      if (part) {
+        winPath += part + '\\'
+        folderBreadcrumbs.value.push({
+          name: part,
+          path: winPath
+        })
       }
-      
-      const children = convertToTreeData(data.folders || [])
-      
-      // 更新节点的children属性
-      treeNode.dataRef.children = children
-      
-      // 强制更新树组件
-      folderTreeData.value = [...folderTreeData.value]
-    } else {
-      message.error('加载子文件夹失败: ' + response.data.message)
-    }
-  } catch (error) {
-    // 处理API返回的错误信息
-    if (error.response && error.response.data && error.response.data.message) {
-      message.error('加载子文件夹失败: ' + error.response.data.message);
-    } else {
-      message.error('加载子文件夹失败');
-    }
-  } finally {
-    folderTreeLoading.value = false
+    })
   }
 }
 
-// 文件夹选择事件
-const onFolderSelect = (selectedKeys, info) => {
-  if (selectedKeys.length > 0) {
-    selectedPath.value = selectedKeys[0]
+// 返回上级文件夹
+const goToParentFolder = async () => {
+  if (!selectedPath.value) return
+  
+  let parentPath = ''
+  
+  // 处理Windows路径和Unix路径
+  if (selectedPath.value.includes('\\')) {
+    // Windows路径
+    const parts = selectedPath.value.split('\\')
+    parts.pop() // 移除最后一个部分
+    parentPath = parts.join('\\')
+    
+    // 如果只剩下盘符，确保添加反斜杠
+    if (/^[A-Z]:$/.test(parentPath)) {
+      parentPath += '\\'
+    }
+  } else {
+    // Unix路径
+    const parts = selectedPath.value.split('/')
+    parts.pop() // 移除最后一个部分
+    parentPath = parts.join('/')
+    
+    // 确保根路径是 /
+    if (parentPath === '') {
+      parentPath = '/'
+    }
   }
+  
+  // 更新选中路径
+  selectedPath.value = parentPath
+  
+  // 加载父文件夹的内容
+  await fetchFolderTree(parentPath)
 }
 
-// 监控folderTreeData变化的计算属性
-const folderTreeInfo = computed(() => {
-  const info = {
-    length: folderTreeData.value?.length || 0,
-    hasData: folderTreeData.value && folderTreeData.value.length > 0,
-    firstItem: folderTreeData.value && folderTreeData.value.length > 0 ? folderTreeData.value[0] : null
-  }
-  return info
-})
+// 刷新文件夹列表
+const refreshFolderList = () => {
+  fetchFolderTree(selectedPath.value)
+}
 
 // 显示文件夹选择弹窗
 const showFolderTree = async () => {
@@ -712,13 +777,14 @@ const showFolderTree = async () => {
   // 设置当前选择的路径为表单中的output值
   if (formState.output) {
     selectedPath.value = formState.output
-  } else {
   }
+  
+  // 重置根路径，确保每次打开时都能正确获取
+  rootPath.value = ''
   
   folderTreeVisible.value = true
   
-  // 直接使用表单中的路径加载文件夹树
-  // 如果路径无效，后端会使用默认路径并返回错误信息
+  // 加载文件夹列表
   await fetchFolderTree(initialPath.value)
 }
 
@@ -731,21 +797,6 @@ const selectFolder = () => {
   } else {
     message.warning('请先选择一个文件夹')
   }
-}
-
-// 刷新文件夹树
-const refreshFolderTree = () => {
-  // 始终使用初始打开窗口时的路径进行刷新
-  fetchFolderTree(initialPath.value)
-}
-
-// 显示新建文件夹弹窗
-const createNewFolder = () => {
-  newFolderName.value = ''
-  createFolderVisible.value = true
-  nextTick(() => {
-    newFolderInputRef.value?.focus()
-  })
 }
 
 // 确认创建文件夹
@@ -767,8 +818,8 @@ const confirmCreateFolder = async () => {
       message.success('文件夹创建成功')
       createFolderVisible.value = false
       
-      // 刷新文件夹树，使用初始路径（不改变目录显示）
-      await fetchFolderTree(initialPath.value)
+      // 刷新当前目录的文件夹列表
+      await fetchFolderTree(selectedPath.value)
     } else {
       // 使用后端返回的具体错误消息
       message.error(response.data.message || '创建文件夹失败')
@@ -783,6 +834,15 @@ const confirmCreateFolder = async () => {
       message.error('网络错误，请检查连接后重试')
     }
   }
+}
+
+// 显示新建文件夹弹窗
+const createNewFolder = () => {
+  newFolderName.value = ''
+  createFolderVisible.value = true
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
 }
 
 // 获取进度条状态
@@ -1110,19 +1170,19 @@ const fetchGlobalSettings = () => {
 /* 浏览按钮动画效果 */
 @keyframes browse-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.7);
+    box-shadow: 0 0 0 0 rgba(114, 46, 209, 0.7);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(82, 196, 26, 0);
+    box-shadow: 0 0 0 10px rgba(114, 46, 209, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0);
+    box-shadow: 0 0 0 0 rgba(114, 46, 209, 0);
   }
 }
 
 .browse-animation {
   animation: browse-pulse 0.5s 1;
-  background-color: #52c41a !important;
+  background-color: #722ed1 !important;
   color: white !important;
 }
 
@@ -1553,7 +1613,7 @@ a-progress :deep(.ant-progress-outer) {
 /* 文件夹选择按钮样式 */
 .browse-button {
   cursor: pointer;
-  color: #52c41a;
+  color: #722ed1;
   transition: all 0.3s;
   display: flex;
   align-items: center;
@@ -1572,14 +1632,14 @@ a-progress :deep(.ant-progress-outer) {
 
 .browse-button:hover {
   color: #ffffff;
-  background-color: #52c41a;
+  background-color: #722ed1;
   transform: scale(1.05);
-  box-shadow: 0 2px 6px rgba(82, 196, 26, 0.3);
+  box-shadow: 0 2px 6px rgba(114, 46, 209, 0.3);
 }
 
 .browse-button:active {
   transform: scale(0.98);
-  box-shadow: 0 0 0 3px rgba(82, 196, 26, 0.2);
+  box-shadow: 0 0 0 3px rgba(114, 46, 209, 0.2);
 }
 
 .input-with-effect {
@@ -1652,6 +1712,12 @@ a-progress :deep(.ant-progress-outer) {
   padding: 12px;
   background-color: #f9f9f9;
   border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s;
+}
+
+.current-path:hover {
+  background-color: #f0f7ff;
 }
 
 .path-label {
@@ -1666,47 +1732,193 @@ a-progress :deep(.ant-progress-outer) {
   display: flex;
   align-items: center;
   gap: 4px;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: highlight 1s ease-out;
 }
 
-.tree-container {
+.parent-folder-btn {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 0 8px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  border-radius: 12px;
+  transition: all 0.3s;
+}
+
+.parent-folder-btn:hover {
+  background-color: #e6f7ff;
+  transform: translateY(-1px);
+}
+
+.folder-list-container {
   border: 1px solid #f0f0f0;
-  border-radius: 6px;
-  padding: 12px;
+  border-radius: 8px;
+  padding: 16px;
   max-height: 350px;
   overflow-y: auto;
   background-color: #fafafa;
-}
-
-.folder-tree {
-  background-color: transparent;
-}
-
-.folder-tree :deep(.ant-tree-node-content-wrapper) {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
   transition: all 0.3s;
-  border-radius: 4px;
-  padding: 4px 8px;
+  position: relative;
 }
 
-.folder-tree :deep(.ant-tree-node-content-wrapper:hover) {
+.folder-list-container:hover {
+  border-color: #d9d9d9;
+}
+
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 16px;
+  padding: 8px;
+}
+
+.folder-item {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  border-radius: 8px;
+  transition: all 0.3s;
+  border: 1px solid transparent;
+  user-select: none;
+}
+
+.folder-item:hover {
   background-color: #e6f7ff;
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
-.folder-tree :deep(.ant-tree-node-selected) {
-  background-color: #bae7ff !important;
+.folder-selected {
+  background-color: #bae7ff;
+  border-color: #1890ff;
+}
+
+.folder-icon-wrapper {
+  margin-bottom: 8px;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background-color: #e6f7ff;
+  transition: all 0.3s;
+}
+
+.folder-item:hover .folder-icon-wrapper {
+  background-color: #bae7ff;
+  transform: scale(1.05);
+}
+
+.folder-icon {
+  font-size: 24px;
   color: #1890ff;
-  font-weight: 500;
+  transition: all 0.3s;
 }
 
-.empty-tree {
+.folder-item:hover .folder-icon {
+  color: #40a9ff;
+}
+
+.folder-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.folder-selected .folder-name {
+  color: #1890ff;
+}
+
+.empty-folders {
   text-align: center;
   padding: 40px 0;
   color: #999;
+  border-radius: 8px;
+  background-color: #f9f9f9;
+  transition: all 0.3s;
 }
 
-.empty-tree .empty-icon {
+.empty-folders:hover {
+  background-color: #f0f7ff;
+}
+
+.empty-folders .empty-icon {
   font-size: 48px;
   margin-bottom: 12px;
   color: #d9d9d9;
+  animation: float 3s ease-in-out infinite;
+}
+
+.root-path-info {
+  font-size: 12px;
+  color: #999;
+  margin-top: 10px;
+  padding: 4px 8px;
+  background-color: #f0f0f0;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.breadcrumb-container {
+  margin-top: 16px;
+  padding: 8px 12px;
+  background-color: #f9f9f9;
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
+  transition: all 0.3s;
+}
+
+.breadcrumb-container:hover {
+  background-color: #f0f7ff;
+}
+
+.breadcrumb-container a {
+  transition: all 0.3s;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.breadcrumb-container a:hover {
+  background-color: #e6f7ff;
+  color: #1890ff;
+}
+
+.active-crumb {
+  color: #1890ff;
+  font-weight: 500;
+  background-color: #e6f7ff;
+}
+
+@keyframes highlight {
+  0% { background-color: #e6f7ff; }
+  100% { background-color: #1890ff; }
+}
+
+/* 添加双击动画效果 */
+@keyframes folder-double-click {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+
+.folder-item:active {
+  animation: folder-double-click 0.2s ease;
 }
 
 .tree-actions {
@@ -1714,6 +1926,22 @@ a-progress :deep(.ant-progress-outer) {
   text-align: right;
   padding-top: 12px;
   border-top: 1px solid #f0f0f0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.tree-actions .ant-btn {
+  transition: all 0.3s;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tree-actions .ant-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* 响应式设计优化 */
@@ -1753,7 +1981,7 @@ a-progress :deep(.ant-progress-outer) {
     }
   }
   
-  .tree-container {
+  .folder-list-container {
     max-height: 250px;
   }
 }

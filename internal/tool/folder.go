@@ -51,8 +51,8 @@ func GetFolderList(targetPath string) (*FolderListResponse, error) {
 		return nil, fmt.Errorf("目录无法读取: %s", absPath)
 	}
 
-	// 读取目录内容，增加递归深度到5层，提供更完整的文件树
-	folders, err := scanFolders(absPath, 5)
+	// 只读取当前目录下的文件夹，不再递归获取子文件夹
+	folders, err := scanCurrentFolders(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取目录失败: %w", err)
 	}
@@ -65,7 +65,66 @@ func GetFolderList(targetPath string) (*FolderListResponse, error) {
 	return response, nil
 }
 
-// scanFolders 扫描文件夹，支持递归
+// scanCurrentFolders 只扫描当前目录下的文件夹，不递归
+func scanCurrentFolders(dirPath string) ([]FolderInfo, error) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return []FolderInfo{}, nil
+	}
+
+	var folders []FolderInfo
+
+	for _, entry := range entries {
+		// 跳过隐藏文件夹和特殊文件夹
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		if !entry.IsDir() {
+			continue
+		}
+
+		fullPath := filepath.Join(dirPath, entry.Name())
+
+		// 检查是否可读
+		if !isReadableDir(fullPath) {
+			continue
+		}
+
+		folderInfo := FolderInfo{
+			Name: entry.Name(),
+			Path: fullPath,
+			// 不再递归获取子文件夹，但保留Children字段以指示是否有子文件夹
+		}
+
+		// 检查是否有子文件夹（不递归获取内容，只标记是否存在）
+		hasChildren := false
+		if subEntries, err := os.ReadDir(fullPath); err == nil {
+			for _, subEntry := range subEntries {
+				if subEntry.IsDir() && !strings.HasPrefix(subEntry.Name(), ".") {
+					hasChildren = true
+					break
+				}
+			}
+		}
+
+		// 如果有子文件夹，则添加一个空的子文件夹列表，前端可以据此判断是否可以进一步导航
+		if hasChildren {
+			folderInfo.Children = []FolderInfo{}
+		}
+
+		folders = append(folders, folderInfo)
+	}
+
+	// 按名称排序
+	sort.Slice(folders, func(i, j int) bool {
+		return folders[i].Name < folders[j].Name
+	})
+
+	return folders, nil
+}
+
+// scanFolders 扫描文件夹，支持递归（保留此函数以防在其他地方被使用）
 func scanFolders(dirPath string, maxDepth int) ([]FolderInfo, error) {
 	if maxDepth <= 0 {
 		return []FolderInfo{}, nil
