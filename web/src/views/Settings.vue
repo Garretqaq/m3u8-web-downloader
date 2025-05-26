@@ -279,7 +279,11 @@ const loadSettings = async () => {
     }
   } catch (error) {
     console.error('无法加载配置:', error)
-    message.error('无法加载配置，请稍后再试。')
+    if (error.response && error.response.data && error.response.data.message) {
+      message.error('加载配置失败: ' + error.response.data.message)
+    } else {
+      message.error('无法加载配置，请稍后再试。')
+    }
   } finally {
     loading.value = false
   }
@@ -318,9 +322,14 @@ const saveSettings = async () => {
   } catch (error) {
     console.error('保存配置失败:', error)
     saveResult.type = 'error'
-    saveResult.message = '无法保存配置，请稍后再试'
+    if (error.response && error.response.data && error.response.data.message) {
+      saveResult.message = '保存失败: ' + error.response.data.message
+      message.error('保存失败: ' + error.response.data.message)
+    } else {
+      saveResult.message = '无法保存配置，请稍后再试'
+      message.error('无法保存配置，请稍后再试')
+    }
     saveResult.show = true
-    message.error('无法保存配置，请稍后再试')
   } finally {
     loading.value = false
   }

@@ -3,7 +3,7 @@
     <a-spin :spinning="store.initialLoading" tip="加载中..." class="full-page-loading">
       <a-card class="main-card">
         <!-- 页头部分 -->
-        <div class="header animate__animated animate__fadeIn">
+        <div class="header fade-in">
           <div class="title-section">
             <a-typography-title :level="3" style="margin: 0; color: #1890ff; font-size: 20px;">
               <DownloadOutlined class="title-icon" /> M3U8 下载管理
@@ -46,7 +46,7 @@
           <a-row :gutter="[20, 20]" class="card-row">
             <a-col :xs="24" :sm="12" :md="8" :lg="8" :xl="6" :xxl="6" v-for="task in store.sortedTasks" :key="task.id">
               <a-card 
-                class="task-card animate__animated animate__fadeIn" 
+                class="task-card fade-in" 
                 :hoverable="true"
                 :bordered="true">
                 <div class="task-header">
@@ -137,7 +137,7 @@
             </a-col>
           </a-row>
           
-          <div v-if="store.tasks.length === 0" class="empty-state animate__animated animate__fadeIn">
+          <div v-if="store.tasks.length === 0" class="empty-state fade-in">
             <div class="empty-icon">
               <InboxOutlined />
             </div>
@@ -172,7 +172,7 @@
       :width="700"
       class="download-modal"
     >
-      <div class="animate__animated animate__fadeIn animate__faster">
+      <div class="fade-in-fast">
         <a-form 
           ref="formRef"
           :model="formState"
@@ -232,20 +232,18 @@
               >
                 <template #addonAfter>
                   <span
-                    class="paste-button"
-                    title="粘贴剪贴板"
-                    @click="pasteOutput"
-                    id="output-paste-btn"
+                    class="browse-button"
+                    title="选择文件夹"
+                    @click="showFolderTree"
+                    id="output-browse-btn"
                   >
-                    <svg width="14" height="14" viewBox="0 0 1024 1024">
-                      <path d="M832 112H724V72c0-22.1-17.9-40-40-40H340c-22.1 0-40 17.9-40 40v40H192c-35.3 0-64 28.7-64 64v712c0 35.3 28.7 64 64 64h640c35.3 0 64-28.7 64-64V176c0-35.3-28.7-64-64-64zM372 80h280v32H372V80zm484 808c0 17.7-14.3 32-32 32H200c-17.7 0-32-14.3-32-32V184c0-17.7 14.3-32 32-32h88v40c0 22.1 17.9 40 40 40h304c22.1 0 40-17.9 40-40v-40h88c17.7 0 32 14.3 32 32v704z" fill="#1890ff"/>
-                    </svg>
-                    <span>粘贴</span>
+                    <FolderOpenOutlined style="font-size: 14px;" />
+                    <span>选择</span>
                   </span>
                 </template>
               </a-input>
               <template #extra>
-                <span class="form-extra">请确保目录已存在且有写入权限</span>
+                <span class="form-extra">点击选择按钮浏览并选择下载目录</span>
               </template>
             </a-form-item>
             
@@ -338,6 +336,100 @@
       </div>
     </a-modal>
     
+    <!-- 文件夹选择弹窗 -->
+    <a-modal
+      v-model:open="folderTreeVisible"
+      title="选择下载文件夹"
+      :confirm-loading="folderTreeLoading"
+      @ok="selectFolder"
+      :ok-text="'确定选择'"
+      :cancel-text="'取消'"
+      centered
+      :width="600"
+      class="folder-tree-modal"
+    >
+      <div class="folder-tree-container">
+        <div class="current-path">
+          <span class="path-label">当前选择：</span>
+          <a-tag color="blue" class="selected-path">
+            <FolderOutlined />
+            {{ selectedPath || '未选择' }}
+          </a-tag>
+        </div>
+        
+        <a-spin :spinning="folderTreeLoading" tip="加载文件夹...">
+          <div class="tree-container">
+            <a-tree
+              v-if="folderTreeData.length > 0"
+              :tree-data="folderTreeData"
+              :field-names="{ children: 'children', title: 'title', key: 'key' }"
+              :selectable="true"
+              :show-line="true"
+              :show-icon="true"
+              :load-data="loadChildNodes"
+              :default-expanded-keys="[rootPath]"
+              :selected-keys="selectedPath ? [selectedPath] : []"
+              @select="onFolderSelect"
+              class="folder-tree"
+            >
+              <template #icon="{ dataRef }">
+                <FolderOutlined v-if="!dataRef.isLeaf" />
+                <FileOutlined v-else />
+              </template>
+            </a-tree>
+            
+            <div v-else-if="!folderTreeLoading" class="empty-tree">
+              <FolderOutlined class="empty-icon" />
+              <div class="empty-text">暂无可选择的文件夹</div>
+              <div style="font-size: 12px; color: #999; margin-top: 10px;">
+                根路径: {{ rootPath || '未设置' }}
+              </div>
+            </div>
+          </div>
+        </a-spin>
+        
+        <div class="tree-actions">
+          <a-button @click="refreshFolderTree" :loading="folderTreeLoading" size="small">
+            <template #icon><ReloadOutlined /></template>
+            刷新
+          </a-button>
+          <a-button @click="createNewFolder" type="primary" size="small" style="margin-left: 8px">
+            <template #icon><PlusOutlined /></template>
+            新建文件夹
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
+    
+    <!-- 新建文件夹弹窗 -->
+    <a-modal
+      v-model:open="createFolderVisible"
+      title="新建文件夹"
+      @ok="confirmCreateFolder"
+      :ok-text="'创建'"
+      :cancel-text="'取消'"
+      centered
+      :width="400"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="文件夹名称">
+          <a-input 
+            v-model:value="newFolderName"
+            placeholder="请输入文件夹名称"
+            @keyup.enter="confirmCreateFolder"
+            ref="newFolderInputRef"
+          />
+        </a-form-item>
+        <a-form-item label="创建位置">
+          <a-input 
+            :value="selectedPath || rootPath"
+            readonly
+            :prefix="h(FolderOutlined)"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+    
     <!-- 删除确认弹窗 -->
     <a-modal
       v-model:open="deleteModalVisible"
@@ -349,7 +441,7 @@
       centered
       :width="420"
     >
-      <div class="delete-confirm animate__animated animate__fadeIn animate__faster">
+      <div class="delete-confirm fade-in-fast">
         <ExclamationCircleOutlined class="warning-icon" />
         <div class="delete-message">
           <p class="delete-title">确定要删除该下载任务吗？</p>
@@ -361,7 +453,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount, h, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, h, computed, nextTick } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
 import { message, Modal } from 'ant-design-vue'
 import { 
@@ -372,6 +464,7 @@ import {
   DownloadOutlined,
   FileOutlined,
   FolderOutlined,
+  FolderOpenOutlined,
   LinkOutlined,
   TeamOutlined,
   InboxOutlined,
@@ -395,6 +488,19 @@ const currentTaskId = ref(null)
 let refreshInterval = null
 const urlInputRef = ref(null)
 const outputInputRef = ref(null)
+
+// 文件夹选择相关状态
+const folderTreeVisible = ref(false)
+const folderTreeLoading = ref(false)
+const folderTreeData = ref([])
+const selectedPath = ref('')
+const rootPath = ref('')
+const initialPath = ref('') // 记住刚打开窗口时的路径
+
+// 新建文件夹相关状态
+const createFolderVisible = ref(false)
+const newFolderName = ref('')
+const newFolderInputRef = ref(null)
 
 // 全局限速值
 const speedLimit = ref(0)
@@ -467,6 +573,218 @@ onBeforeUnmount(() => {
   clearInterval(refreshInterval)
 })
 
+// 获取文件树数据
+const fetchFolderTree = async (path = '') => {
+  try {
+    folderTreeLoading.value = true
+    
+    const response = await axios.get('/api/folders', {
+      params: { path }
+    })
+    
+    if (response.data.success) {
+      const data = response.data.data
+      rootPath.value = data.rootPath || ''
+      
+      // 转换为antd tree需要的格式
+      const convertToTreeData = (folders, depth = 0) => {
+        if (!folders || !Array.isArray(folders)) {
+          return []
+        }
+        return folders.map(folder => {
+          const hasChildren = folder.children && folder.children.length > 0
+          return {
+            title: folder.name,
+            key: folder.path,
+            isLeaf: !hasChildren, // 如果有子文件夹，则不是叶子节点
+            children: hasChildren ? convertToTreeData(folder.children, depth + 1) : undefined
+          }
+        })
+      }
+      
+      const treeData = convertToTreeData(data.folders || [])
+      
+      // 无论是否有path参数，都更新folderTreeData
+      folderTreeData.value = treeData
+      
+      // 如果selectedPath还没有设置，或者表单的output为空，则使用返回的rootPath
+      if (!selectedPath.value || !formState.output) {
+        selectedPath.value = rootPath.value
+      }
+      
+      // 如果传入了path参数，说明是懒加载子节点，返回转换后的数据
+      if (path) {
+        return treeData
+      }
+    } else {
+      message.error(response.data.message || '获取文件夹列表失败')
+      folderTreeData.value = []
+    }
+  } catch (error) {
+    // 处理API返回的错误信息
+    if (error.response && error.response.data && error.response.data.message) {
+      message.error(error.response.data.message);
+    } else {
+      message.error('获取文件夹列表失败');
+    }
+    folderTreeData.value = []
+  } finally {
+    folderTreeLoading.value = false
+  }
+}
+
+// 加载子节点（懒加载）
+const loadChildNodes = async (treeNode) => {
+  try {
+    folderTreeLoading.value = true
+    
+    const response = await axios.get('/api/folders', {
+      params: { path: treeNode.dataRef.key }
+    })
+    
+    if (response.data.success) {
+      const data = response.data.data
+      
+      // 转换子节点数据
+      const convertToTreeData = (folders) => {
+        if (!folders || !Array.isArray(folders)) {
+          return []
+        }
+        return folders.map(folder => ({
+          title: folder.name,
+          key: folder.path,
+          isLeaf: false,
+          children: folder.children ? convertToTreeData(folder.children) : undefined
+        }))
+      }
+      
+      const children = convertToTreeData(data.folders || [])
+      
+      // 更新节点的children属性
+      treeNode.dataRef.children = children
+      
+      // 强制更新树组件
+      folderTreeData.value = [...folderTreeData.value]
+    } else {
+      message.error('加载子文件夹失败: ' + response.data.message)
+    }
+  } catch (error) {
+    // 处理API返回的错误信息
+    if (error.response && error.response.data && error.response.data.message) {
+      message.error('加载子文件夹失败: ' + error.response.data.message);
+    } else {
+      message.error('加载子文件夹失败');
+    }
+  } finally {
+    folderTreeLoading.value = false
+  }
+}
+
+// 文件夹选择事件
+const onFolderSelect = (selectedKeys, info) => {
+  if (selectedKeys.length > 0) {
+    selectedPath.value = selectedKeys[0]
+  }
+}
+
+// 监控folderTreeData变化的计算属性
+const folderTreeInfo = computed(() => {
+  const info = {
+    length: folderTreeData.value?.length || 0,
+    hasData: folderTreeData.value && folderTreeData.value.length > 0,
+    firstItem: folderTreeData.value && folderTreeData.value.length > 0 ? folderTreeData.value[0] : null
+  }
+  return info
+})
+
+// 显示文件夹选择弹窗
+const showFolderTree = async () => {
+  // 添加按钮动画效果
+  const button = document.getElementById('output-browse-btn');
+  button?.classList.add('browse-animation');
+  setTimeout(() => {
+    button?.classList.remove('browse-animation');
+  }, 500);
+  
+  // 记住初始路径（刚打开窗口时的路径）
+  initialPath.value = formState.output || ''
+  
+  // 设置当前选择的路径为表单中的output值
+  if (formState.output) {
+    selectedPath.value = formState.output
+  } else {
+  }
+  
+  folderTreeVisible.value = true
+  
+  // 直接使用表单中的路径加载文件夹树
+  // 如果路径无效，后端会使用默认路径并返回错误信息
+  await fetchFolderTree(initialPath.value)
+}
+
+// 确认选择文件夹
+const selectFolder = () => {
+  if (selectedPath.value) {
+    formState.output = selectedPath.value
+    folderTreeVisible.value = false
+    message.success('已选择下载位置: ' + selectedPath.value)
+  } else {
+    message.warning('请先选择一个文件夹')
+  }
+}
+
+// 刷新文件夹树
+const refreshFolderTree = () => {
+  // 始终使用初始打开窗口时的路径进行刷新
+  fetchFolderTree(initialPath.value)
+}
+
+// 显示新建文件夹弹窗
+const createNewFolder = () => {
+  newFolderName.value = ''
+  createFolderVisible.value = true
+  nextTick(() => {
+    newFolderInputRef.value?.focus()
+  })
+}
+
+// 确认创建文件夹
+const confirmCreateFolder = async () => {
+  if (!newFolderName.value.trim()) {
+    message.warning('请输入文件夹名称')
+    return
+  }
+  
+  try {
+    const createPath = selectedPath.value || rootPath.value
+    
+    const response = await axios.post('/api/folders/create', {
+      path: createPath,
+      name: newFolderName.value.trim()
+    })
+    
+    if (response.data.success) {
+      message.success('文件夹创建成功')
+      createFolderVisible.value = false
+      
+      // 刷新文件夹树，使用初始路径（不改变目录显示）
+      await fetchFolderTree(initialPath.value)
+    } else {
+      // 使用后端返回的具体错误消息
+      message.error(response.data.message || '创建文件夹失败')
+    }
+  } catch (error) {
+    // 处理网络错误或其他异常
+    if (error.response && error.response.data && error.response.data.message) {
+      // 如果是HTTP错误响应，使用响应中的错误消息
+      message.error(error.response.data.message)
+    } else {
+      // 其他类型的错误（网络错误等）
+      message.error('网络错误，请检查连接后重试')
+    }
+  }
+}
+
 // 获取进度条状态
 const getProgressStatus = (status) => {
   switch (status) {
@@ -524,7 +842,7 @@ const getLastFormData = () => {
       };
     }
   } catch (err) {
-    console.error('读取上次表单数据失败:', err)
+    // 静默处理错误
   }
   return null // 返回null表示没有本地存储数据
 }
@@ -543,7 +861,7 @@ const getDefaultSettings = async () => {
       }
     }
   } catch (error) {
-    console.error('获取默认设置失败:', error)
+    // 静默处理错误
   }
   // 如果获取失败，返回硬编码的默认值
   return { c: 25, deleteTs: true, convertToMp4: true }
@@ -692,23 +1010,6 @@ const pasteCustomFileName = async () => {
   }
 }
 
-const pasteOutput = async () => {
-  try {
-    // 添加按钮动画效果
-    const button = document.getElementById('output-paste-btn');
-    button?.classList.add('paste-animation');
-    setTimeout(() => {
-      button?.classList.remove('paste-animation');
-    }, 500);
-    
-    const text = await navigator.clipboard.readText()
-    formState.output = text
-    message.success('已粘贴剪贴板内容')
-  } catch (e) {
-    message.error('无法读取剪贴板内容，请检查浏览器权限')
-  }
-}
-
 // 保存表单数据到localStorage（只保存链接和文件名）
 const saveFormData = (values) => {
   try {
@@ -763,7 +1064,67 @@ const fetchGlobalSettings = () => {
 </script>
 
 <style scoped>
-@import 'https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css';
+/* 自定义淡入动画 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-out;
+}
+
+.fade-in-fast {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* 粘贴动画效果 */
+@keyframes paste-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(24, 144, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0);
+  }
+}
+
+.paste-animation {
+  animation: paste-pulse 0.5s 1;
+  background-color: #1890ff !important;
+  color: white !important;
+}
+
+.paste-animation svg path {
+  fill: white !important;
+}
+
+/* 浏览按钮动画效果 */
+@keyframes browse-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(82, 196, 26, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0);
+  }
+}
+
+.browse-animation {
+  animation: browse-pulse 0.5s 1;
+  background-color: #52c41a !important;
+  color: white !important;
+}
 
 .download-manager {
   width: 100%;
@@ -1189,27 +1550,36 @@ a-progress :deep(.ant-progress-outer) {
   fill: #ffffff;
 }
 
-/* 粘贴动画效果 */
-@keyframes paste-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.7);
-  }
-  70% {
-    box-shadow: 0 0 0 10px rgba(24, 144, 255, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(24, 144, 255, 0);
-  }
+/* 文件夹选择按钮样式 */
+.browse-button {
+  cursor: pointer;
+  color: #52c41a;
+  transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border-radius: 4px;
+  height: 100%;
+  font-weight: 500;
+  font-size: 13px;
+  gap: 6px;
+  position: relative;
+  overflow: hidden;
+  min-width: 64px;
+  box-shadow: none;
 }
 
-.paste-animation {
-  animation: paste-pulse 0.5s 1;
-  background-color: #1890ff !important;
-  color: white !important;
+.browse-button:hover {
+  color: #ffffff;
+  background-color: #52c41a;
+  transform: scale(1.05);
+  box-shadow: 0 2px 6px rgba(82, 196, 26, 0.3);
 }
 
-.paste-animation svg path {
-  fill: white !important;
+.browse-button:active {
+  transform: scale(0.98);
+  box-shadow: 0 0 0 3px rgba(82, 196, 26, 0.2);
 }
 
 .input-with-effect {
@@ -1265,6 +1635,87 @@ a-progress :deep(.ant-progress-outer) {
   }
 }
 
+/* 文件夹选择弹窗样式 */
+.folder-tree-modal :deep(.ant-modal-body) {
+  padding: 16px;
+}
+
+.folder-tree-container {
+  max-height: 500px;
+  overflow: hidden;
+}
+
+.current-path {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px;
+  background-color: #f9f9f9;
+  border-radius: 6px;
+}
+
+.path-label {
+  margin-right: 8px;
+  font-weight: 500;
+  color: #666;
+}
+
+.selected-path {
+  font-size: 13px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tree-container {
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  padding: 12px;
+  max-height: 350px;
+  overflow-y: auto;
+  background-color: #fafafa;
+}
+
+.folder-tree {
+  background-color: transparent;
+}
+
+.folder-tree :deep(.ant-tree-node-content-wrapper) {
+  transition: all 0.3s;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.folder-tree :deep(.ant-tree-node-content-wrapper:hover) {
+  background-color: #e6f7ff;
+}
+
+.folder-tree :deep(.ant-tree-node-selected) {
+  background-color: #bae7ff !important;
+  color: #1890ff;
+  font-weight: 500;
+}
+
+.empty-tree {
+  text-align: center;
+  padding: 40px 0;
+  color: #999;
+}
+
+.empty-tree .empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  color: #d9d9d9;
+}
+
+.tree-actions {
+  margin-top: 16px;
+  text-align: right;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
 /* 响应式设计优化 */
 @media (max-width: 768px) {
   .download-manager {
@@ -1292,6 +1743,18 @@ a-progress :deep(.ant-progress-outer) {
   
   .task-card :deep(.ant-card-body) {
     padding: 12px !important;
+  }
+  
+  .folder-tree-modal {
+    :deep(.ant-modal) {
+      max-width: 95vw !important;
+      margin: 0 auto;
+      top: 20px;
+    }
+  }
+  
+  .tree-container {
+    max-height: 250px;
   }
 }
 
