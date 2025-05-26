@@ -91,11 +91,31 @@ fi
 
 echo -e "${GREEN}使用 Dockerfile: $DOCKERFILE${NC}"
 
+# 构建前端
+echo -e "${BLUE}====================================${NC}"
+echo -e "${GREEN}开始构建前端项目${NC}"
+echo -e "${BLUE}====================================${NC}"
+cd "$PROJECT_DIR/web"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}错误: 无法进入前端目录 $PROJECT_DIR/web${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}执行 npm run build${NC}"
+npm run build
+if [ $? -ne 0 ]; then
+    echo -e "${RED}错误: 前端构建失败${NC}"
+    exit 1
+fi
+
+# 返回项目根目录
+cd "$PROJECT_DIR"
+echo -e "${GREEN}前端构建完成${NC}"
+
 # 检查前端dist目录是否存在
 if [ ! -d "$PROJECT_DIR/web/dist" ]; then
-    echo -e "${YELLOW}警告: 前端dist目录不存在，可能导致构建失败${NC}"
-    echo -e "${GREEN}检查项目目录结构...${NC}"
-    ls -la "$PROJECT_DIR/web"
+    echo -e "${RED}错误: 前端构建后dist目录不存在${NC}"
+    exit 1
 fi
 
 # 创建或使用 buildx 构建器
